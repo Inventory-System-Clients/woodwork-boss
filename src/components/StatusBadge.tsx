@@ -13,17 +13,17 @@ const statusStyles: Record<string, string> = {
 };
 
 const statusLabels: Record<string, string> = {
-  draft: "Draft",
-  sent: "Sent",
-  approved: "Approved",
-  rejected: "Rejected",
-  cutting: "Cutting",
-  assembly: "Assembly",
-  finishing: "Finishing",
-  quality_check: "QC",
-  delivered: "Delivered",
-  entry: "Entry",
-  exit: "Exit",
+  draft: "Rascunho",
+  sent: "Enviado",
+  approved: "Aprovado",
+  rejected: "Rejeitado",
+  cutting: "Corte",
+  assembly: "Montagem",
+  finishing: "Acabamento",
+  quality_check: "Controle",
+  delivered: "Entregue",
+  entry: "Entrada",
+  exit: "Saída",
 };
 
 export function StatusBadge({ status }: { status: string }) {

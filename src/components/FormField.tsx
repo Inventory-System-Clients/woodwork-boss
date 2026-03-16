@@ -30,7 +30,7 @@ export function FormField(props: FormFieldProps) {
       <div className="space-y-1.5">
         <label className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">{label}</label>
         <select className={baseClass} {...selectProps}>
-          <option value="">Select...</option>
+          <option value="">Selecione...</option>
           {options.map((o) => (
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}

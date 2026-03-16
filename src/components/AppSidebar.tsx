@@ -3,13 +3,13 @@ import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
 
 const navItems = [
-  { title: "Dashboard", url: "/", icon: LayoutDashboard },
-  { title: "Clients", url: "/clients", icon: Users },
-  { title: "Products", url: "/products", icon: Box },
-  { title: "Stock", url: "/stock", icon: Package },
-  { title: "Budgets", url: "/budgets", icon: FileText },
-  { title: "Production", url: "/production", icon: Hammer },
-  { title: "Logistics", url: "/logistics", icon: Truck },
+  { title: "Painel", url: "/", icon: LayoutDashboard },
+  { title: "Clientes", url: "/clients", icon: Users },
+  { title: "Produtos", url: "/products", icon: Box },
+  { title: "Estoque", url: "/stock", icon: Package },
+  { title: "Orçamentos", url: "/budgets", icon: FileText },
+  { title: "Produção", url: "/production", icon: Hammer },
+  { title: "Logística", url: "/logistics", icon: Truck },
 ];
 
 export function AppSidebar() {

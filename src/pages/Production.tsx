@@ -17,11 +17,11 @@ const ProductionPage = () => {
   };
 
   const columns = [
-    { key: "clientName", header: "Client" },
-    { key: "description", header: "Description" },
+    { key: "clientName", header: "Cliente" },
+    { key: "description", header: "Descrição" },
     { key: "productionStatus", header: "Status", render: (o: Order) => <StatusBadge status={o.productionStatus} /> },
-    { key: "deliveryDate", header: "Delivery", mono: true },
-    { key: "installationTeam", header: "Team" },
+    { key: "deliveryDate", header: "Entrega", mono: true },
+    { key: "installationTeam", header: "Equipe" },
     {
       key: "actions", header: "",
       render: (o: Order) => o.productionStatus !== "delivered" ? (
@@ -29,16 +29,16 @@ const ProductionPage = () => {
           onClick={(e) => { e.stopPropagation(); advanceStatus(o); }}
           className="px-2 py-1 text-[11px] font-bold rounded bg-primary/20 text-primary hover:bg-primary/30 transition-colors"
         >
-          ADVANCE →
+          AVANÇAR →
         </button>
       ) : (
-        <span className="text-[11px] text-success font-bold">✓ DONE</span>
+        <span className="text-[11px] text-success font-bold">✓ CONCLUÍDO</span>
       ),
     },
   ];
 
   return (
-    <DashboardLayout title="Production" subtitle="Order Tracking">
+    <DashboardLayout title="Produção" subtitle="Acompanhamento de Pedidos">
       <div className="animate-fade-in space-y-6">
         <div className="flex gap-3 flex-wrap">
           {statuses.map(s => {
