@@ -29,25 +29,25 @@ const StockPage = () => {
   };
 
   const columns = [
-    { key: "date", header: "Date", mono: true },
+    { key: "date", header: "Data", mono: true },
     { key: "productName", header: "Material" },
-    { key: "type", header: "Type", render: (m: StockMovement) => <StatusBadge status={m.type} /> },
-    { key: "quantity", header: "Qty", mono: true, render: (m: StockMovement) => (
+    { key: "type", header: "Tipo", render: (m: StockMovement) => <StatusBadge status={m.type} /> },
+    { key: "quantity", header: "Qtd.", mono: true, render: (m: StockMovement) => (
       <span className="flex items-center gap-1.5">
         {m.type === "entry" ? <ArrowUpCircle className="h-3.5 w-3.5 text-success" /> : <ArrowDownCircle className="h-3.5 w-3.5 text-destructive" />}
         {m.quantity}
       </span>
     )},
-    { key: "note", header: "Note" },
+    { key: "note", header: "Observação" },
   ];
 
   return (
     <DashboardLayout
-      title="Stock"
-      subtitle="Inventory Control"
+      title="Estoque"
+      subtitle="Controle de Inventário"
       action={
         <button onClick={() => setModal(true)} className="bg-primary text-primary-foreground px-3 py-1.5 rounded text-xs font-bold hover:opacity-90 transition-opacity flex items-center gap-1.5">
-          <Plus className="h-3.5 w-3.5" /> NEW MOVEMENT
+          <Plus className="h-3.5 w-3.5" /> NOVA MOVIMENTAÇÃO
         </button>
       }
     >
@@ -55,15 +55,15 @@ const StockPage = () => {
         <DataTable columns={columns} data={movements} />
       </div>
 
-      <Modal open={modal} onClose={() => setModal(false)} title="New Stock Movement">
+      <Modal open={modal} onClose={() => setModal(false)} title="Nova Movimentação de Estoque">
         <div className="space-y-4">
-          <FormField label="Material" as="select" value={form.productId} onChange={e => setForm({ ...form, productId: e.target.value })} options={products.map(p => ({ value: p.id, label: `${p.name} (Stock: ${p.stock})` }))} />
-          <FormField label="Type" as="select" value={form.type} onChange={e => setForm({ ...form, type: e.target.value as "entry" | "exit" })} options={[{ value: "entry", label: "Entry" }, { value: "exit", label: "Exit" }]} />
-          <FormField label="Quantity" type="number" value={form.quantity} onChange={e => setForm({ ...form, quantity: Number(e.target.value) })} />
-          <FormField label="Note" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="Reason for movement" />
+          <FormField label="Material" as="select" value={form.productId} onChange={e => setForm({ ...form, productId: e.target.value })} options={products.map(p => ({ value: p.id, label: `${p.name} (Estoque: ${p.stock})` }))} />
+          <FormField label="Tipo" as="select" value={form.type} onChange={e => setForm({ ...form, type: e.target.value as "entry" | "exit" })} options={[{ value: "entry", label: "Entrada" }, { value: "exit", label: "Saída" }]} />
+          <FormField label="Quantidade" type="number" value={form.quantity} onChange={e => setForm({ ...form, quantity: Number(e.target.value) })} />
+          <FormField label="Observação" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="Motivo da movimentação" />
           <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => setModal(false)} className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground">Cancel</button>
-            <button onClick={addMovement} className="px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity">Register</button>
+            <button onClick={() => setModal(false)} className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground">Cancelar</button>
+            <button onClick={addMovement} className="px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity">Registrar</button>
           </div>
         </div>
       </Modal>

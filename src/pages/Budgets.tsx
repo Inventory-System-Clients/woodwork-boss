@@ -63,12 +63,12 @@ const BudgetsPage = () => {
   };
 
   const columns = [
-    { key: "createdAt", header: "Date", mono: true },
-    { key: "clientName", header: "Client" },
-    { key: "materialCost", header: "Materials", mono: true, render: (b: Budget) => `R$ ${b.materialCost.toFixed(2)}` },
-    { key: "laborCost", header: "Labor", mono: true, render: (b: Budget) => `R$ ${b.laborCost.toFixed(2)}` },
-    { key: "profitMargin", header: "Margin", mono: true, render: (b: Budget) => `${(b.profitMargin * 100).toFixed(0)}%` },
-    { key: "finalPrice", header: "Final Price", mono: true, render: (b: Budget) => `R$ ${b.finalPrice.toFixed(2)}` },
+    { key: "createdAt", header: "Data", mono: true },
+    { key: "clientName", header: "Cliente" },
+    { key: "materialCost", header: "Materiais", mono: true, render: (b: Budget) => `R$ ${b.materialCost.toFixed(2)}` },
+    { key: "laborCost", header: "Mão de Obra", mono: true, render: (b: Budget) => `R$ ${b.laborCost.toFixed(2)}` },
+    { key: "profitMargin", header: "Margem", mono: true, render: (b: Budget) => `${(b.profitMargin * 100).toFixed(0)}%` },
+    { key: "finalPrice", header: "Preço Final", mono: true, render: (b: Budget) => `R$ ${b.finalPrice.toFixed(2)}` },
     { key: "status", header: "Status", render: (b: Budget) => <StatusBadge status={b.status} /> },
     {
       key: "actions", header: "",
@@ -77,7 +77,7 @@ const BudgetsPage = () => {
           onClick={(e) => { e.stopPropagation(); convertToOrder(b); }}
           className="px-2 py-1 text-[11px] font-bold rounded bg-success/20 text-success hover:bg-success/30 transition-colors"
         >
-          APPROVE
+          APROVAR
         </button>
       ) : null,
     },
@@ -85,10 +85,10 @@ const BudgetsPage = () => {
 
   return (
     <DashboardLayout
-      title="Budgets"
+      title="Orçamentos"
       action={
         <button onClick={() => setModal(true)} className="bg-primary text-primary-foreground px-3 py-1.5 rounded text-xs font-bold hover:opacity-90 transition-opacity flex items-center gap-1.5">
-          <Plus className="h-3.5 w-3.5" /> NEW BUDGET
+          <Plus className="h-3.5 w-3.5" /> NOVO ORÇAMENTO
         </button>
       }
     >
@@ -96,12 +96,12 @@ const BudgetsPage = () => {
         <DataTable columns={columns} data={data} />
       </div>
 
-      <Modal open={modal} onClose={() => setModal(false)} title="New Budget" width="max-w-2xl">
+      <Modal open={modal} onClose={() => setModal(false)} title="Novo Orçamento" width="max-w-2xl">
         <div className="space-y-6">
-          <FormField label="Client" as="select" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={clients.map(c => ({ value: c.id, label: c.name }))} />
+          <FormField label="Cliente" as="select" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={clients.map(c => ({ value: c.id, label: c.name }))} />
 
           <div>
-            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-3">Items</p>
+            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-3">Itens</p>
             {form.items.length > 0 && (
               <div className="border border-border rounded mb-3 divide-y divide-border/50">
                 {form.items.map((item, i) => (
@@ -120,39 +120,39 @@ const BudgetsPage = () => {
                 <FormField label="Material" as="select" value={newItem.productId} onChange={e => setNewItem({ ...newItem, productId: e.target.value })} options={products.map(p => ({ value: p.id, label: `${p.name} - R$ ${p.price.toFixed(2)}` }))} />
               </div>
               <div className="w-24">
-                <FormField label="Qty" type="number" min={1} value={newItem.quantity} onChange={e => setNewItem({ ...newItem, quantity: Number(e.target.value) })} />
+                <FormField label="Qtd." type="number" min={1} value={newItem.quantity} onChange={e => setNewItem({ ...newItem, quantity: Number(e.target.value) })} />
               </div>
               <div className="flex items-end">
-                <button onClick={addItem} className="px-3 py-2 text-xs font-bold rounded border border-border hover:bg-secondary transition-colors text-foreground">ADD</button>
+                <button onClick={addItem} className="px-3 py-2 text-xs font-bold rounded border border-border hover:bg-secondary transition-colors text-foreground">ADICIONAR</button>
               </div>
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
-            <FormField label="Labor Cost (R$)" type="number" step="0.01" value={form.laborCost} onChange={e => setForm({ ...form, laborCost: Number(e.target.value) })} />
-            <FormField label="Profit Margin (%)" type="number" step="1" value={form.profitMargin * 100} onChange={e => setForm({ ...form, profitMargin: Number(e.target.value) / 100 })} />
+            <FormField label="Mão de Obra (R$)" type="number" step="0.01" value={form.laborCost} onChange={e => setForm({ ...form, laborCost: Number(e.target.value) })} />
+            <FormField label="Margem de Lucro (%)" type="number" step="1" value={form.profitMargin * 100} onChange={e => setForm({ ...form, profitMargin: Number(e.target.value) / 100 })} />
           </div>
 
           <div className="border border-border rounded p-4 bg-secondary/20">
             <div className="grid grid-cols-3 gap-4 text-center">
               <div>
-                <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Materials</p>
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Materiais</p>
                 <p className="font-mono font-bold text-foreground">R$ {calc.materialCost.toFixed(2)}</p>
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Total Cost</p>
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Custo Total</p>
                 <p className="font-mono font-bold text-foreground">R$ {calc.totalCost.toFixed(2)}</p>
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Final Price</p>
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Preço Final</p>
                 <p className="font-mono font-bold text-primary text-lg">R$ {calc.finalPrice.toFixed(2)}</p>
               </div>
             </div>
           </div>
 
           <div className="flex justify-end gap-3">
-            <button onClick={() => setModal(false)} className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground">Cancel</button>
-            <button onClick={saveBudget} className="px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity">Create Budget</button>
+            <button onClick={() => setModal(false)} className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground">Cancelar</button>
+            <button onClick={saveBudget} className="px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity">Criar Orçamento</button>
           </div>
         </div>
       </Modal>

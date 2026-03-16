@@ -20,7 +20,7 @@ export function DataTable<T extends { id: string }>({
   columns,
   data,
   onRowClick,
-  emptyMessage = "No data. Click to add first item.",
+  emptyMessage = "Sem dados. Clique para adicionar o primeiro item.",
   rowHighlight,
 }: DataTableProps<T>) {
   return (
