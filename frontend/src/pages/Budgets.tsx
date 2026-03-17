@@ -7,9 +7,203 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { budgets as initialBudgets, clients, products, calculateBudget, Budget, BudgetItem } from "@/data/mockData";
 import { Plus, Trash2 } from "lucide-react";
 
+const imageDataUrlCache: Record<string, string | null | undefined> = {};
+
+const formatCurrency = (value: number) =>
+  value.toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  });
+
+const formatPercent = (value: number) => `${(value * 100).toFixed(0)}%`;
+
+const formatStatus = (status: Budget["status"]) => {
+  switch (status) {
+    case "draft":
+      return "Rascunho";
+    case "sent":
+      return "Enviado";
+    case "approved":
+      return "Aprovado";
+    case "rejected":
+      return "Rejeitado";
+    default:
+      return status;
+  }
+};
+
+const sanitizeFileName = (value: string) =>
+  value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+
+const blobToDataUrl = (blob: Blob) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+      } else {
+        reject(new Error("Falha ao converter logo para data URL."));
+      }
+    };
+
+    reader.onerror = () => reject(new Error("Falha ao carregar logo para PDF."));
+    reader.readAsDataURL(blob);
+  });
+
+const loadImageDataUrl = async (imagePath: string) => {
+  const cacheKey = imagePath;
+
+  if (imageDataUrlCache[cacheKey] !== undefined) {
+    return imageDataUrlCache[cacheKey] ?? null;
+  }
+
+  try {
+    const response = await fetch(imagePath);
+
+    if (!response.ok) {
+      imageDataUrlCache[cacheKey] = null;
+      return null;
+    }
+
+    const blob = await response.blob();
+    const dataUrl = await blobToDataUrl(blob);
+    imageDataUrlCache[cacheKey] = dataUrl;
+    return dataUrl;
+  } catch {
+    imageDataUrlCache[cacheKey] = null;
+    return null;
+  }
+};
+
+const loadLogoDataUrl = async () => loadImageDataUrl("/image.png");
+
+const loadContractTopBannerDataUrl = async () => loadImageDataUrl("/partecima.png");
+
+const loadContractBottomBannerDataUrl = async () => loadImageDataUrl("/partebaixo_.png");
+
+interface ContractFormState {
+  contratanteName: string;
+  operationName: string;
+  projectAddress: string;
+  kioskWidthMeters: number;
+  kioskDepthMeters: number;
+  contractValue: number;
+  signatureCity: string;
+  signatureDate: string;
+  clauses: ContractClause[];
+}
+
+interface ContractClause {
+  id: string;
+  title: string;
+  content: string;
+}
+
+const DEFAULT_CONTRACT_CLAUSES: Array<Pick<ContractClause, "title" | "content">> = [
+  {
+    title: "CLÁUSULA 1 — DO OBJETO",
+    content: [
+      "O objeto deste contrato consiste na execução dos seguintes serviços:",
+      "• Projeto de Arquitetura",
+      "• Projeto Executivo",
+      "• Projeto Elétrico",
+      "• Projeto Hidrossanitário",
+      "• ARTs de todos os projetos e da execução",
+      "• Estrutura metálica em metalon 100x100 galvanizado, conforme projeto a ser apresentado",
+      "• Piso cimentício",
+      "• Acabamento de piso em porcelanato 30x30",
+      "• Telhas modelo sanduíche, com pintura interna a definir conforme projeto",
+      "• Iluminação completa conforme projeto",
+      "• Acabamento interno em pintura, conforme projeto a ser aprovado",
+      "• Pintura da estrutura metálica",
+      "• Parede de fundo do quiosque (parte externa) em ACM, com revestimento em adesivo",
+      "• Parede de fundo do quiosque (parte interna) em ACM, com desenvolvimento de armários suspensos",
+      "• Passarela externa em lona marrom",
+      "• Fechamentos laterais e frontais em ACM, conforme projeto a ser aprovado",
+      "• Contorno frontal e caixa em granito",
+      "• Fechamentos laterais e frontais com pintura na cor Azul Tiffany",
+      "• Elétrica completa: iluminação, tomadas, interruptores e quadro elétrico, conforme projeto a ser aprovado pelo Mall",
+      "• Comunicação visual completa, conforme orientação e aprovação da marca",
+      "",
+      "Não incluso:",
+      "• Equipamentos eletroeletrônicos",
+      "• Equipamentos próprios da operação do cliente",
+    ].join("\n"),
+  },
+  {
+    title: "CLÁUSULA 2 — DO VALOR",
+    content: [
+      "A CONTRATANTE pagará à CONTRATADA o valor unitário de {{valor_contrato}}.",
+      "O pagamento deverá ser efetuado da seguinte forma:",
+      "(a) 50% (cinquenta por cento) na aprovação do projeto e início da produção;",
+      "(b) 50% (cinquenta por cento) dois dias antes da entrega e instalação do quiosque no endereço da obra.",
+    ].join("\n"),
+  },
+  {
+    title: "CLÁUSULA 4 — DA GARANTIA",
+    content:
+      "A contratada oferece 90 (noventa) dias de garantia contra defeitos de fabricação ou instalação, não cobrindo danos decorrentes de mau uso, acidentes, intervenções de terceiros ou eventos naturais.",
+  },
+  {
+    title: "CLÁUSULA 5 — DAS ALTERAÇÕES",
+    content:
+      "Qualquer alteração após o início da produção poderá gerar custos adicionais e prorrogação de prazo. Alterações somente serão feitas mediante autorização expressa.",
+  },
+  {
+    title: "CLÁUSULA 6 — DA RESCISÃO",
+    content:
+      "A contratante poderá rescindir antes do início da produção, mediante multa de 20% do valor total. Após a aprovação do projeto e início da produção, não haverá reembolso dos valores pagos.",
+  },
+];
+
+const createClauseId = () => `clause-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+const createDefaultContractClauses = (): ContractClause[] =>
+  DEFAULT_CONTRACT_CLAUSES.map((clause) => ({
+    id: createClauseId(),
+    title: clause.title,
+    content: clause.content,
+  }));
+
+const getTodayInputDate = () => {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const formatLongDate = (inputDate: string) => {
+  const date = new Date(`${inputDate}T00:00:00`);
+
+  if (Number.isNaN(date.getTime())) {
+    return inputDate;
+  }
+
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(date);
+};
+
+const replaceContractPlaceholders = (value: string, contractValue: number) =>
+  value.replace(/\{\{\s*valor_contrato\s*\}\}/gi, formatCurrency(contractValue));
+
 const BudgetsPage = () => {
   const [data, setData] = useState<Budget[]>(initialBudgets);
   const [modal, setModal] = useState(false);
+  const [generatingPdfId, setGeneratingPdfId] = useState<string | null>(null);
+  const [contractModalOpen, setContractModalOpen] = useState(false);
+  const [selectedBudgetForContract, setSelectedBudgetForContract] = useState<Budget | null>(null);
+  const [isGeneratingContract, setIsGeneratingContract] = useState(false);
+  const [contractFormError, setContractFormError] = useState("");
   const [form, setForm] = useState({
     clientId: "",
     laborCost: 0,
@@ -17,6 +211,17 @@ const BudgetsPage = () => {
     items: [] as BudgetItem[],
   });
   const [newItem, setNewItem] = useState({ productId: "", quantity: 1 });
+  const [contractForm, setContractForm] = useState<ContractFormState>({
+    contratanteName: "",
+    operationName: "",
+    projectAddress: "",
+    kioskWidthMeters: 3,
+    kioskDepthMeters: 4,
+    contractValue: 0,
+    signatureCity: "São Paulo",
+    signatureDate: getTodayInputDate(),
+    clauses: createDefaultContractClauses(),
+  });
 
   const addItem = () => {
     const product = products.find(p => p.id === newItem.productId);
@@ -62,6 +267,469 @@ const BudgetsPage = () => {
     setData(d => d.map(x => x.id === b.id ? { ...x, status: "approved" as const } : x));
   };
 
+  const addClause = () => {
+    setContractForm((current) => {
+      const nextNumber = current.clauses.length + 1;
+
+      return {
+        ...current,
+        clauses: [
+          ...current.clauses,
+          {
+            id: createClauseId(),
+            title: `CLÁUSULA ${nextNumber} — NOVA CLÁUSULA`,
+            content: "",
+          },
+        ],
+      };
+    });
+  };
+
+  const updateClause = (clauseId: string, patch: Partial<ContractClause>) => {
+    setContractForm((current) => ({
+      ...current,
+      clauses: current.clauses.map((clause) =>
+        clause.id === clauseId ? { ...clause, ...patch } : clause,
+      ),
+    }));
+  };
+
+  const removeClause = (clauseId: string) => {
+    setContractForm((current) => {
+      if (current.clauses.length <= 1) {
+        return current;
+      }
+
+      return {
+        ...current,
+        clauses: current.clauses.filter((clause) => clause.id !== clauseId),
+      };
+    });
+  };
+
+  const closeContractModal = () => {
+    setContractModalOpen(false);
+    setSelectedBudgetForContract(null);
+    setContractFormError("");
+  };
+
+  const openContractModal = (budget: Budget) => {
+    const linkedClient = clients.find((client) => client.id === budget.clientId);
+
+    setSelectedBudgetForContract(budget);
+    setContractFormError("");
+    setContractForm({
+      contratanteName: linkedClient?.name || budget.clientName || "",
+      operationName: budget.clientName || linkedClient?.name || "",
+      projectAddress: linkedClient?.address || "",
+      kioskWidthMeters: 3,
+      kioskDepthMeters: 4,
+      contractValue: Number(budget.finalPrice.toFixed(2)),
+      signatureCity: "São Paulo",
+      signatureDate: getTodayInputDate(),
+      clauses: createDefaultContractClauses(),
+    });
+    setContractModalOpen(true);
+  };
+
+  const generateBudgetPdf = async (budget: Budget) => {
+    setGeneratingPdfId(budget.id);
+
+    try {
+      const { jsPDF } = await import("jspdf");
+      const pdf = new jsPDF({ unit: "mm", format: "a4" });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const marginX = 14;
+      const contentWidth = pageWidth - marginX * 2;
+
+      let y = 16;
+
+      const logoDataUrl = await loadLogoDataUrl();
+      if (logoDataUrl) {
+        pdf.addImage(logoDataUrl, "PNG", marginX, y - 3, 14, 14);
+      }
+
+      pdf.setTextColor(166, 124, 0);
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(20);
+      pdf.text("Mais Quioque", logoDataUrl ? marginX + 18 : marginX, y + 5);
+
+      pdf.setTextColor(90, 90, 90);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(10);
+      pdf.text("Proposta comercial para cliente", logoDataUrl ? marginX + 18 : marginX, y + 10);
+
+      y += 16;
+      pdf.setDrawColor(210, 210, 210);
+      pdf.line(marginX, y, pageWidth - marginX, y);
+
+      y += 8;
+      pdf.setTextColor(30, 30, 30);
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(12);
+      pdf.text(`Orçamento #${budget.id}`, marginX, y);
+
+      y += 6;
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(10);
+      pdf.text(`Cliente: ${budget.clientName}`, marginX, y);
+
+      y += 5;
+      pdf.text(`Data de emissão: ${budget.createdAt}`, marginX, y);
+
+      y += 5;
+      pdf.text(`Status: ${formatStatus(budget.status)}`, marginX, y);
+
+      y += 10;
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(11);
+      pdf.text("Itens do orçamento", marginX, y);
+
+      y += 5;
+      const drawItemsHeader = () => {
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(9);
+        pdf.setDrawColor(190, 190, 190);
+        pdf.rect(marginX, y, contentWidth, 7);
+        pdf.text("Item", marginX + 2, y + 4.6);
+        pdf.text("Qtd.", 114, y + 4.6, { align: "right" });
+        pdf.text("Valor Unit.", 148, y + 4.6, { align: "right" });
+        pdf.text("Subtotal", pageWidth - marginX - 2, y + 4.6, { align: "right" });
+        y += 7;
+      };
+
+      drawItemsHeader();
+
+      for (const item of budget.items) {
+        const itemLines = pdf.splitTextToSize(item.productName, 86);
+        const rowHeight = Math.max(7, itemLines.length * 4.5 + 2.5);
+
+        if (y + rowHeight > pageHeight - 38) {
+          pdf.addPage();
+          y = 20;
+          drawItemsHeader();
+        }
+
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(9);
+        pdf.rect(marginX, y, contentWidth, rowHeight);
+        pdf.text(itemLines, marginX + 2, y + 4.2);
+        pdf.text(String(item.quantity), 114, y + 4.2, { align: "right" });
+        pdf.text(formatCurrency(item.unitPrice), 148, y + 4.2, { align: "right" });
+        pdf.text(formatCurrency(item.subtotal), pageWidth - marginX - 2, y + 4.2, { align: "right" });
+
+        y += rowHeight;
+      }
+
+      y += 8;
+      const summaryWidth = 78;
+      const summaryX = pageWidth - marginX - summaryWidth;
+
+      if (y + 34 > pageHeight - 18) {
+        pdf.addPage();
+        y = 20;
+      }
+
+      pdf.setDrawColor(190, 190, 190);
+      pdf.rect(summaryX, y, summaryWidth, 34);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(9);
+
+      const summaryRows: Array<[string, string]> = [
+        ["Materiais", formatCurrency(budget.materialCost)],
+        ["Mão de obra", formatCurrency(budget.laborCost)],
+        ["Custo total", formatCurrency(budget.totalCost)],
+        ["Margem", formatPercent(budget.profitMargin)],
+      ];
+
+      let summaryY = y + 6;
+      summaryRows.forEach(([label, value]) => {
+        pdf.setTextColor(50, 50, 50);
+        pdf.text(label, summaryX + 2, summaryY);
+        pdf.text(value, summaryX + summaryWidth - 2, summaryY, { align: "right" });
+        summaryY += 6;
+      });
+
+      pdf.setTextColor(166, 124, 0);
+      pdf.setFont("helvetica", "bold");
+      pdf.text("Preço final", summaryX + 2, summaryY);
+      pdf.text(formatCurrency(budget.finalPrice), summaryX + summaryWidth - 2, summaryY, { align: "right" });
+
+      pdf.setFont("helvetica", "normal");
+      pdf.setTextColor(110, 110, 110);
+      pdf.setFontSize(8);
+      pdf.text("Documento gerado automaticamente pelo sistema Mais Quioque.", marginX, pageHeight - 10);
+
+      const safeClientName = sanitizeFileName(budget.clientName) || "cliente";
+      pdf.save(`orcamento-${budget.id}-${safeClientName}.pdf`);
+    } catch {
+      window.alert("Não foi possível gerar o PDF deste orçamento. Tente novamente.");
+    } finally {
+      setGeneratingPdfId(null);
+    }
+  };
+
+  const generateContractPdf = async () => {
+    if (!selectedBudgetForContract) {
+      return;
+    }
+
+    if (!contractForm.contratanteName.trim()) {
+      setContractFormError("Informe o nome da contratante.");
+      return;
+    }
+
+    if (!contractForm.operationName.trim()) {
+      setContractFormError("Informe o nome da operação/cliente final.");
+      return;
+    }
+
+    if (contractForm.contractValue <= 0) {
+      setContractFormError("Informe um valor válido para o contrato.");
+      return;
+    }
+
+    if (contractForm.kioskWidthMeters <= 0 || contractForm.kioskDepthMeters <= 0) {
+      setContractFormError("Informe dimensões válidas para o quiosque.");
+      return;
+    }
+
+    if (!contractForm.signatureDate) {
+      setContractFormError("Informe a data de assinatura.");
+      return;
+    }
+
+    if (contractForm.clauses.length === 0) {
+      setContractFormError("Adicione ao menos uma cláusula para gerar o contrato.");
+      return;
+    }
+
+    const invalidClause = contractForm.clauses.find(
+      (clause) => !clause.title.trim() || !clause.content.trim(),
+    );
+
+    if (invalidClause) {
+      setContractFormError("Todas as cláusulas devem ter nome e conteúdo.");
+      return;
+    }
+
+    setIsGeneratingContract(true);
+    setContractFormError("");
+
+    try {
+      const { jsPDF } = await import("jspdf");
+      const pdf = new jsPDF({ unit: "mm", format: "a4" });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const marginX = 14;
+      const contentWidth = pageWidth - marginX * 2;
+      const bottomMargin = 10;
+
+      const lineHeightFor = (fontSize: number) => Number((fontSize * 0.45).toFixed(2));
+
+      const resolveBannerHeight = (
+        bannerDataUrl: string | null,
+        minHeight: number,
+        maxHeight: number,
+      ) => {
+        if (!bannerDataUrl) {
+          return 0;
+        }
+
+        try {
+          const properties = pdf.getImageProperties(bannerDataUrl);
+          const ratio = properties.height / properties.width;
+          const suggestedHeight = pageWidth * ratio;
+          return Math.min(maxHeight, Math.max(minHeight, Number(suggestedHeight.toFixed(2))));
+        } catch {
+          return minHeight;
+        }
+      };
+
+      const topBannerDataUrl = await loadContractTopBannerDataUrl();
+      const bottomBannerDataUrl = await loadContractBottomBannerDataUrl();
+      const topBannerHeight = resolveBannerHeight(topBannerDataUrl, 26, 62);
+      const bottomBannerHeight = resolveBannerHeight(bottomBannerDataUrl, 18, 46);
+      const reservedBottomDecoration = bottomBannerDataUrl ? bottomBannerHeight + 3 : 0;
+      const contentBottomLimit = pageHeight - bottomMargin - reservedBottomDecoration;
+
+      if (topBannerDataUrl) {
+        pdf.addImage(topBannerDataUrl, "PNG", 0, 0, pageWidth, topBannerHeight);
+      }
+
+      let y = topBannerDataUrl ? topBannerHeight + 8 : 16;
+
+      const ensureSpace = (requiredHeight: number) => {
+        if (y + requiredHeight <= contentBottomLimit) {
+          return;
+        }
+
+        pdf.addPage();
+        y = 16;
+      };
+
+      const writeParagraph = (
+        text: string,
+        options: {
+          fontStyle?: "normal" | "bold";
+          fontSize?: number;
+          marginBottom?: number;
+        } = {},
+      ) => {
+        const { fontStyle = "normal", fontSize = 10, marginBottom = 1.6 } = options;
+        const lines = pdf.splitTextToSize(text, contentWidth) as string[];
+        const lineHeight = lineHeightFor(fontSize);
+        const blockHeight = Math.max(lineHeight, lines.length * lineHeight);
+
+        ensureSpace(blockHeight + marginBottom);
+
+        pdf.setFont("helvetica", fontStyle);
+        pdf.setFontSize(fontSize);
+        pdf.text(lines, marginX, y);
+        y += blockHeight + marginBottom;
+      };
+
+      const writeSectionTitle = (title: string) => {
+        y += 1;
+        writeParagraph(title, { fontStyle: "bold", fontSize: 11, marginBottom: 2 });
+      };
+
+      const writeTextBlock = (text: string, marginBottom = 2) => {
+        const lines = text.split("\n");
+
+        lines.forEach((rawLine, index) => {
+          const line = rawLine.trim();
+
+          if (!line) {
+            y += 1;
+            return;
+          }
+
+          if (/^[-•]\s+/.test(line)) {
+            writeBullet(line.replace(/^[-•]\s+/, ""));
+            return;
+          }
+
+          writeParagraph(line, {
+            marginBottom: index === lines.length - 1 ? marginBottom : 1,
+          });
+        });
+      };
+
+      const writeBullet = (text: string) => {
+        const fontSize = 10;
+        const lineHeight = lineHeightFor(fontSize);
+        const lines = pdf.splitTextToSize(text, contentWidth - 9) as string[];
+        const blockHeight = Math.max(lineHeight, lines.length * lineHeight) + 1;
+
+        ensureSpace(blockHeight);
+
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(fontSize);
+
+        lines.forEach((line, index) => {
+          const prefix = index === 0 ? "• " : "";
+          const x = index === 0 ? marginX + 1 : marginX + 6;
+          pdf.text(`${prefix}${line}`, x, y + index * lineHeight);
+        });
+
+        y += lines.length * lineHeight + 1;
+      };
+
+      pdf.setTextColor(35, 35, 35);
+      writeParagraph("CONTRATO DE PRESTACAO DE SERVICOS", { fontStyle: "bold", fontSize: 12, marginBottom: 2.4 });
+
+      writeParagraph(
+        `Direcionada a desenvolvimento, criação e montagem de quiosque medindo ${contractForm.kioskWidthMeters}x${contractForm.kioskDepthMeters} metros destinado ao cliente ${contractForm.operationName}.`,
+        { marginBottom: 2.5 },
+      );
+
+      y += 1;
+      writeParagraph("CONTRATADA:", { fontStyle: "bold", marginBottom: 1.2 });
+      writeParagraph(
+        "MAIS QUIOSQUE, situada na Rua Professor Athanassof, 28 - Cidade Patriarca - São Paulo/SP, inscrita no CNPJ nº 07.313.928/0001-75 (Gira Kids),",
+        { marginBottom: 1 },
+      );
+      writeParagraph("E-mail: maisquiosque@hotmail.com", { marginBottom: 1 });
+      writeParagraph("Telefone: +55 11 98327-0902", { marginBottom: 2.2 });
+
+      writeParagraph(`CONTRATANTE: ${contractForm.contratanteName}`, {
+        fontStyle: "bold",
+        marginBottom: 2.2,
+      });
+
+      writeParagraph(
+        "As partes acima identificadas acordam a presente Proposta Comercial de Prestação de Serviços, que será regida pelas cláusulas a seguir:",
+        { marginBottom: 2.2 },
+      );
+
+      contractForm.clauses.forEach((clause, index) => {
+        writeSectionTitle(clause.title.trim());
+        writeTextBlock(
+          replaceContractPlaceholders(clause.content, contractForm.contractValue),
+          index === contractForm.clauses.length - 1 ? 2.5 : 2,
+        );
+      });
+
+      if (contractForm.projectAddress.trim()) {
+        writeParagraph(`Endereço da obra: ${contractForm.projectAddress.trim()}`, {
+          fontStyle: "bold",
+          marginBottom: 3,
+        });
+      }
+
+      const dateFontSize = 10;
+      const dateMarginBottom = 8;
+      const signatureOffsetAfterDate = 8;
+      const signatureBottomOffset = 15;
+      const signatureSectionHeight =
+        lineHeightFor(dateFontSize) + dateMarginBottom + signatureOffsetAfterDate + signatureBottomOffset;
+      const footerTopY = bottomBannerDataUrl ? pageHeight - bottomBannerHeight : pageHeight - bottomMargin;
+      const signatureGapToFooter = 3;
+
+      ensureSpace(signatureSectionHeight + 1);
+
+      const targetSignatureStartY = footerTopY - signatureGapToFooter - signatureSectionHeight;
+      if (targetSignatureStartY > y) {
+        y = targetSignatureStartY;
+      }
+
+      writeParagraph(`${contractForm.signatureCity}, ${formatLongDate(contractForm.signatureDate)}.`, { marginBottom: 8 });
+
+      const signatureLineWidth = 74;
+      const leftSignatureX = marginX;
+      const rightSignatureX = pageWidth - marginX - signatureLineWidth;
+      const lineY = y + signatureOffsetAfterDate;
+
+      pdf.setDrawColor(140, 140, 140);
+      pdf.line(leftSignatureX, lineY, leftSignatureX + signatureLineWidth, lineY);
+      pdf.line(rightSignatureX, lineY, rightSignatureX + signatureLineWidth, lineY);
+
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(10);
+      pdf.setTextColor(30, 30, 30);
+      pdf.text(contractForm.contratanteName, leftSignatureX, lineY + 5);
+      pdf.text("Contratante", leftSignatureX, lineY + 10);
+
+      pdf.text("Daniel De Souza", rightSignatureX, lineY + 5);
+      pdf.text("Executivo Comercial - Mais Quiosque", rightSignatureX, lineY + 10);
+      pdf.text("Contratada", rightSignatureX, lineY + 15);
+
+      if (bottomBannerDataUrl) {
+        pdf.addImage(bottomBannerDataUrl, "PNG", 0, pageHeight - bottomBannerHeight, pageWidth, bottomBannerHeight);
+      }
+
+      const safeClientName = sanitizeFileName(contractForm.operationName || selectedBudgetForContract.clientName) || "cliente";
+      pdf.save(`contrato-${selectedBudgetForContract.id}-${safeClientName}.pdf`);
+      closeContractModal();
+    } catch {
+      setContractFormError("Não foi possível gerar o contrato em PDF. Tente novamente.");
+    } finally {
+      setIsGeneratingContract(false);
+    }
+  };
+
   const columns = [
     { key: "createdAt", header: "Data", mono: true },
     { key: "clientName", header: "Cliente" },
@@ -72,14 +740,39 @@ const BudgetsPage = () => {
     { key: "status", header: "Status", render: (b: Budget) => <StatusBadge status={b.status} /> },
     {
       key: "actions", header: "",
-      render: (b: Budget) => b.status === "draft" || b.status === "sent" ? (
-        <button
-          onClick={(e) => { e.stopPropagation(); convertToOrder(b); }}
-          className="px-2 py-1 text-[11px] font-bold rounded bg-success/20 text-success hover:bg-success/30 transition-colors"
-        >
-          APROVAR
-        </button>
-      ) : null,
+      render: (b: Budget) => (
+        <div className="flex items-center gap-2">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              void generateBudgetPdf(b);
+            }}
+            disabled={generatingPdfId === b.id}
+            className="px-2 py-1 text-[11px] font-bold rounded border border-primary/30 text-primary hover:bg-primary/10 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {generatingPdfId === b.id ? "GERANDO..." : "PDF"}
+          </button>
+
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              openContractModal(b);
+            }}
+            className="px-2 py-1 text-[11px] font-bold rounded border border-border text-foreground hover:bg-secondary transition-colors"
+          >
+            CONTRATO
+          </button>
+
+          {(b.status === "draft" || b.status === "sent") && (
+            <button
+              onClick={(e) => { e.stopPropagation(); convertToOrder(b); }}
+              className="px-2 py-1 text-[11px] font-bold rounded bg-success/20 text-success hover:bg-success/30 transition-colors"
+            >
+              APROVAR
+            </button>
+          )}
+        </div>
+      ),
     },
   ];
 
@@ -153,6 +846,173 @@ const BudgetsPage = () => {
           <div className="flex justify-end gap-3">
             <button onClick={() => setModal(false)} className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground">Cancelar</button>
             <button onClick={saveBudget} className="px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity">Criar Orçamento</button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={contractModalOpen}
+        onClose={closeContractModal}
+        title={`Contrato • ${selectedBudgetForContract?.clientName || "Cliente"}`}
+        width="max-w-3xl"
+      >
+        <div className="space-y-5 max-h-[72vh] overflow-y-auto pr-1">
+          <div className="border border-border rounded p-3 bg-secondary/20">
+            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-2">Informações Fixas da Contratada</p>
+            <p className="text-sm text-foreground">MAIS QUIOSQUE GALPÃO PRODUÇÃO</p>
+            <p className="text-xs text-muted-foreground">Rua Professor Athanassof, 28 • Cid. Patriarca • São Paulo/SP</p>
+            <p className="text-xs text-muted-foreground">CNPJ 07.313.928/0001-75 • +55 11 98327-0902 • maisquiosque@hotmail.com</p>
+            <p className="text-xs text-muted-foreground mt-1">Assinatura fixa da contratada: Daniel De Souza (Executivo Comercial).</p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <FormField
+              label="Nome da Contratante"
+              value={contractForm.contratanteName}
+              onChange={(e) => setContractForm((current) => ({ ...current, contratanteName: e.target.value }))}
+              placeholder="Ex.: Do Coco ao Cacau LTDA"
+            />
+            <FormField
+              label="Nome da Operação/Cliente"
+              value={contractForm.operationName}
+              onChange={(e) => setContractForm((current) => ({ ...current, operationName: e.target.value }))}
+              placeholder="Ex.: Do Coco ao Cacau"
+            />
+          </div>
+
+          <FormField
+            label="Endereço da Obra"
+            value={contractForm.projectAddress}
+            onChange={(e) => setContractForm((current) => ({ ...current, projectAddress: e.target.value }))}
+            placeholder="Endereço de entrega/instalação"
+          />
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <FormField
+              label="Largura do Quiosque (m)"
+              type="number"
+              min={0.1}
+              step="0.1"
+              value={contractForm.kioskWidthMeters}
+              onChange={(e) =>
+                setContractForm((current) => ({
+                  ...current,
+                  kioskWidthMeters: Number(e.target.value),
+                }))
+              }
+            />
+            <FormField
+              label="Profundidade do Quiosque (m)"
+              type="number"
+              min={0.1}
+              step="0.1"
+              value={contractForm.kioskDepthMeters}
+              onChange={(e) =>
+                setContractForm((current) => ({
+                  ...current,
+                  kioskDepthMeters: Number(e.target.value),
+                }))
+              }
+            />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <FormField
+              label="Valor do Contrato (R$)"
+              type="number"
+              min={0}
+              step="0.01"
+              value={contractForm.contractValue}
+              onChange={(e) =>
+                setContractForm((current) => ({
+                  ...current,
+                  contractValue: Number(e.target.value),
+                }))
+              }
+            />
+            <FormField
+              label="Cidade da Assinatura"
+              value={contractForm.signatureCity}
+              onChange={(e) => setContractForm((current) => ({ ...current, signatureCity: e.target.value }))}
+            />
+            <FormField
+              label="Data da Assinatura"
+              type="date"
+              value={contractForm.signatureDate}
+              onChange={(e) => setContractForm((current) => ({ ...current, signatureDate: e.target.value }))}
+            />
+          </div>
+
+          <div className="border border-border rounded p-3 bg-secondary/20 space-y-4">
+            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">
+              Cláusulas Editáveis
+            </p>
+
+            <p className="text-xs text-muted-foreground -mt-2">
+              Dica: use {'{{valor_contrato}}'} no conteúdo para inserir automaticamente o valor do contrato.
+            </p>
+
+            <div className="space-y-4">
+              {contractForm.clauses.map((clause, index) => (
+                <div key={clause.id} className="rounded border border-border bg-background/60 p-3 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">
+                      Cláusula {index + 1}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeClause(clause.id)}
+                      disabled={contractForm.clauses.length <= 1}
+                      className="px-3 py-1 text-xs rounded border border-border text-muted-foreground hover:bg-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Excluir
+                    </button>
+                  </div>
+
+                  <FormField
+                    label="Nome da Cláusula"
+                    value={clause.title}
+                    onChange={(e) => updateClause(clause.id, { title: e.target.value })}
+                  />
+
+                  <FormField
+                    as="textarea"
+                    rows={6}
+                    label="Conteúdo da Cláusula"
+                    value={clause.content}
+                    onChange={(e) => updateClause(clause.id, { content: e.target.value })}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={addClause}
+                className="px-3 py-1.5 text-xs rounded border border-border text-muted-foreground hover:bg-secondary transition-colors"
+              >
+                Adicionar Cláusula
+              </button>
+            </div>
+          </div>
+
+          {contractFormError && <p className="text-sm text-destructive">{contractFormError}</p>}
+
+          <div className="flex justify-end gap-3">
+            <button
+              onClick={closeContractModal}
+              className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={() => void generateContractPdf()}
+              disabled={isGeneratingContract}
+              className="px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {isGeneratingContract ? "Gerando contrato..." : "Gerar Contrato PDF"}
+            </button>
           </div>
         </div>
       </Modal>

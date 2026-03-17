@@ -2,11 +2,13 @@ import { DashboardLayout } from "@/layouts/DashboardLayout";
 import { StatCard } from "@/components/StatCard";
 import { DataTable } from "@/components/DataTable";
 import { StatusBadge } from "@/components/StatusBadge";
+import { useRoleAccess } from "@/auth/AuthProvider";
 import { budgets, orders, products, getLowStockProducts, getMonthlyRevenue } from "@/data/mockData";
 import { FileText, Hammer, AlertTriangle, DollarSign } from "lucide-react";
 import type { Order, Product } from "@/data/mockData";
 
 const Dashboard = () => {
+  const { canViewFinancials } = useRoleAccess();
   const lowStock = getLowStockProducts(products);
   const revenue = getMonthlyRevenue(budgets);
 
@@ -33,12 +35,14 @@ const Dashboard = () => {
     <DashboardLayout title="Painel" subtitle="Visão Geral">
       <div className="space-y-8 animate-fade-in">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard
-            title="Total de Orçamentos"
-            value={budgets.length}
-            icon={<FileText className="h-4 w-4" />}
-            subtitle={`${budgets.filter(b => b.status === "approved").length} aprovados`}
-          />
+          {canViewFinancials && (
+            <StatCard
+              title="Total de Orçamentos"
+              value={budgets.length}
+              icon={<FileText className="h-4 w-4" />}
+              subtitle={`${budgets.filter(b => b.status === "approved").length} aprovados`}
+            />
+          )}
           <StatCard
             title="Produção Ativa"
             value={orders.length}
@@ -53,12 +57,14 @@ const Dashboard = () => {
             subtitle="Materiais abaixo do mínimo"
             highlight={lowStock.length > 0}
           />
-          <StatCard
-            title="Receita Mensal"
-            value={`R$ ${revenue.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
-            icon={<DollarSign className="h-4 w-4" />}
-            subtitle="De orçamentos aprovados"
-          />
+          {canViewFinancials && (
+            <StatCard
+              title="Receita Mensal"
+              value={`R$ ${revenue.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
+              icon={<DollarSign className="h-4 w-4" />}
+              subtitle="De orçamentos aprovados"
+            />
+          )}
         </div>
 
         <div>
