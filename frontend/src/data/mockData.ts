@@ -51,7 +51,7 @@ export interface Order {
   id: string;
   budgetId?: string;
   clientName: string;
-  productionStatus: "pending" | "cutting" | "assembly" | "finishing" | "quality_check" | "delivered";
+  productionStatus: "pending" | "cutting" | "assembly" | "finishing" | "quality_check" | "approved" | "delivered";
   deliveryDate: string;
   installationTeam: string;
   description: string;

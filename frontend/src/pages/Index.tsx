@@ -11,6 +11,9 @@ const Dashboard = () => {
   const { canViewFinancials } = useRoleAccess();
   const lowStock = getLowStockProducts(products);
   const revenue = getMonthlyRevenue(budgets);
+  const activeOrdersCount = orders.filter(
+    (order) => order.productionStatus !== "approved" && order.productionStatus !== "delivered",
+  ).length;
 
   const orderColumns = [
     { key: "clientName", header: "Cliente" },
@@ -47,7 +50,7 @@ const Dashboard = () => {
             title="Produção Ativa"
             value={orders.length}
             icon={<Hammer className="h-4 w-4" />}
-            subtitle={`${orders.filter(o => o.productionStatus !== "delivered").length} em andamento`}
+            subtitle={`${activeOrdersCount} em andamento`}
             highlight
           />
           <StatCard

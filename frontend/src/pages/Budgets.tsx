@@ -1,10 +1,21 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { DashboardLayout } from "@/layouts/DashboardLayout";
 import { DataTable } from "@/components/DataTable";
 import { Modal } from "@/components/Modal";
 import { FormField } from "@/components/FormField";
 import { StatusBadge } from "@/components/StatusBadge";
-import { budgets as initialBudgets, clients, products, calculateBudget, Budget, BudgetItem } from "@/data/mockData";
+import { clients, products, calculateBudget } from "@/data/mockData";
+import { ApiError } from "@/services/api";
+import {
+  approveBudget,
+  createBudget,
+  getBudgetById,
+  listBudgets,
+  updateBudget,
+  type Budget as ApiBudget,
+  type BudgetMaterial as ApiBudgetMaterial,
+  type BudgetStatus,
+} from "@/services/budgets";
 import { Plus, Trash2 } from "lucide-react";
 
 const imageDataUrlCache: Record<string, string | null | undefined> = {};
@@ -17,12 +28,12 @@ const formatCurrency = (value: number) =>
 
 const formatPercent = (value: number) => `${(value * 100).toFixed(0)}%`;
 
-const formatStatus = (status: Budget["status"]) => {
+const formatStatus = (status: BudgetRow["status"]) => {
   switch (status) {
     case "draft":
       return "Rascunho";
-    case "sent":
-      return "Enviado";
+    case "pending":
+      return "Pendente";
     case "approved":
       return "Aprovado";
     case "rejected":
@@ -86,6 +97,105 @@ const loadLogoDataUrl = async () => loadImageDataUrl("/image.png");
 const loadContractTopBannerDataUrl = async () => loadImageDataUrl("/partecima.png");
 
 const loadContractBottomBannerDataUrl = async () => loadImageDataUrl("/partebaixo_.png");
+
+interface BudgetItemRow {
+  productId: string;
+  productName: string;
+  quantity: number;
+  unit: string;
+  unitPrice: number;
+  subtotal: number;
+}
+
+interface BudgetRow {
+  id: string;
+  clientId: string;
+  clientName: string;
+  description: string;
+  status: BudgetStatus;
+  deliveryDate: string;
+  notes: string | null;
+  approvedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  items: BudgetItemRow[];
+  materialCost: number;
+  laborCost: number;
+  totalCost: number;
+  profitMargin: number;
+  finalPrice: number;
+}
+
+const normalizeDateOnly = (value: string | null | undefined) => {
+  if (!value || typeof value !== "string") {
+    return "";
+  }
+
+  return value.includes("T") ? value.split("T")[0] : value;
+};
+
+const normalizeBudgetError = (error: unknown, fallback: string) => {
+  if (error instanceof ApiError) {
+    if (error.status === 403) {
+      return "Acesso negado. Somente admin e gerente podem gerenciar orçamentos.";
+    }
+
+    if (error.status === 500) {
+      return "Erro interno ao processar orçamentos. Tente novamente.";
+    }
+
+    if (error.status === 400) {
+      return `Erro de validação: ${error.message}`;
+    }
+
+    return error.message || fallback;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return fallback;
+};
+
+const mapBudgetItemFromApi = (item: ApiBudgetMaterial): BudgetItemRow => ({
+  productId: item.productId || "",
+  productName: item.productName,
+  quantity: Number(item.quantity) || 0,
+  unit: item.unit || "unidade",
+  unitPrice: Number(item.unitPrice) || 0,
+  subtotal: (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0),
+});
+
+const mapBudgetFromApi = (budget: ApiBudget): BudgetRow => {
+  const items = budget.materials.map(mapBudgetItemFromApi);
+  const materialCost = items.reduce((sum, item) => sum + item.subtotal, 0);
+  const totalCost = materialCost;
+  const finalPrice = Number(budget.totalPrice) || 0;
+  const laborCost = Math.max(0, totalCost - materialCost);
+  const profitMargin = totalCost > 0 ? Math.max(0, (finalPrice - totalCost) / totalCost) : 0;
+
+  const linkedClient = clients.find((client) => client.name === budget.clientName);
+
+  return {
+    id: budget.id,
+    clientId: linkedClient?.id || "",
+    clientName: budget.clientName,
+    description: budget.description,
+    status: budget.status,
+    deliveryDate: normalizeDateOnly(budget.deliveryDate),
+    notes: budget.notes,
+    approvedAt: budget.approvedAt,
+    createdAt: normalizeDateOnly(budget.createdAt),
+    updatedAt: normalizeDateOnly(budget.updatedAt),
+    items,
+    materialCost,
+    laborCost,
+    totalCost,
+    profitMargin,
+    finalPrice,
+  };
+};
 
 interface ContractFormState {
   contratanteName: string;
@@ -196,20 +306,45 @@ const formatLongDate = (inputDate: string) => {
 const replaceContractPlaceholders = (value: string, contractValue: number) =>
   value.replace(/\{\{\s*valor_contrato\s*\}\}/gi, formatCurrency(contractValue));
 
+const createInitialBudgetForm = () => ({
+  clientId: "",
+  description: "",
+  deliveryDate: "",
+  notes: "",
+  laborCost: 0,
+  profitMargin: 0.35,
+  items: [] as BudgetItemRow[],
+});
+
+const createInitialDetailForm = () => ({
+  clientName: "",
+  description: "",
+  deliveryDate: "",
+  notes: "",
+  status: "draft" as BudgetStatus,
+  totalPrice: 0,
+});
+
 const BudgetsPage = () => {
-  const [data, setData] = useState<Budget[]>(initialBudgets);
+  const [data, setData] = useState<BudgetRow[]>([]);
   const [modal, setModal] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [requestError, setRequestError] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [approvingId, setApprovingId] = useState<string | null>(null);
   const [generatingPdfId, setGeneratingPdfId] = useState<string | null>(null);
   const [contractModalOpen, setContractModalOpen] = useState(false);
-  const [selectedBudgetForContract, setSelectedBudgetForContract] = useState<Budget | null>(null);
+  const [selectedBudgetForContract, setSelectedBudgetForContract] = useState<BudgetRow | null>(null);
   const [isGeneratingContract, setIsGeneratingContract] = useState(false);
   const [contractFormError, setContractFormError] = useState("");
-  const [form, setForm] = useState({
-    clientId: "",
-    laborCost: 0,
-    profitMargin: 0.35,
-    items: [] as BudgetItem[],
-  });
+  const [detailModalOpen, setDetailModalOpen] = useState(false);
+  const [selectedBudget, setSelectedBudget] = useState<BudgetRow | null>(null);
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+  const [isUpdatingDetail, setIsUpdatingDetail] = useState(false);
+  const [detailError, setDetailError] = useState("");
+  const [detailForm, setDetailForm] = useState(createInitialDetailForm());
+  const [form, setForm] = useState(createInitialBudgetForm);
   const [newItem, setNewItem] = useState({ productId: "", quantity: 1 });
   const [contractForm, setContractForm] = useState<ContractFormState>({
     contratanteName: "",
@@ -223,48 +358,190 @@ const BudgetsPage = () => {
     clauses: createDefaultContractClauses(),
   });
 
+  const loadBudgetsFromApi = async () => {
+    setIsLoading(true);
+    setRequestError("");
+
+    try {
+      const budgets = await listBudgets();
+      setData(budgets.map(mapBudgetFromApi));
+    } catch (error) {
+      setData([]);
+      setRequestError(normalizeBudgetError(error, "Não foi possível carregar os orçamentos."));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadBudgetsFromApi();
+  }, []);
+
   const addItem = () => {
-    const product = products.find(p => p.id === newItem.productId);
-    if (!product) return;
-    const item: BudgetItem = {
+    const product = products.find((p) => p.id === newItem.productId);
+
+    if (!product) {
+      return;
+    }
+
+    const item: BudgetItemRow = {
       productId: product.id,
       productName: product.name,
       quantity: newItem.quantity,
+      unit: product.unit,
       unitPrice: product.price,
       subtotal: product.price * newItem.quantity,
     };
-    setForm(f => ({ ...f, items: [...f.items, item] }));
+
+    setForm((current) => ({ ...current, items: [...current.items, item] }));
     setNewItem({ productId: "", quantity: 1 });
   };
 
   const removeItem = (idx: number) => {
-    setForm(f => ({ ...f, items: f.items.filter((_, i) => i !== idx) }));
+    setForm((current) => ({ ...current, items: current.items.filter((_, i) => i !== idx) }));
   };
 
   const calc = calculateBudget(form.items, form.laborCost, form.profitMargin);
 
-  const saveBudget = () => {
-    const client = clients.find(c => c.id === form.clientId);
-    const budget: Budget = {
-      id: `b${Date.now()}`,
-      clientId: form.clientId,
-      clientName: client?.name || "",
-      items: form.items,
-      materialCost: calc.materialCost,
-      laborCost: form.laborCost,
-      totalCost: calc.totalCost,
-      profitMargin: form.profitMargin,
-      finalPrice: calc.finalPrice,
-      status: "draft",
-      createdAt: new Date().toISOString().split("T")[0],
-    };
-    setData(d => [budget, ...d]);
+  const closeCreateModal = () => {
     setModal(false);
-    setForm({ clientId: "", laborCost: 0, profitMargin: 0.35, items: [] });
+    setFormError("");
+    setForm(createInitialBudgetForm());
+    setNewItem({ productId: "", quantity: 1 });
   };
 
-  const convertToOrder = (b: Budget) => {
-    setData(d => d.map(x => x.id === b.id ? { ...x, status: "approved" as const } : x));
+  const saveBudget = async () => {
+    const client = clients.find((item) => item.id === form.clientId);
+
+    if (!client) {
+      setFormError("Selecione um cliente válido.");
+      return;
+    }
+
+    if (!form.description.trim()) {
+      setFormError("Informe a descrição do orçamento.");
+      return;
+    }
+
+    if (form.items.length === 0) {
+      setFormError("Adicione ao menos um material no orçamento.");
+      return;
+    }
+
+    setIsSaving(true);
+    setFormError("");
+
+    try {
+      const created = await createBudget({
+        clientName: client.name,
+        description: form.description.trim(),
+        deliveryDate: form.deliveryDate ? new Date(`${form.deliveryDate}T00:00:00`).toISOString() : null,
+        totalPrice: calc.finalPrice,
+        notes: form.notes.trim() ? form.notes.trim() : null,
+        status: "draft",
+        materials: form.items.map((item) => ({
+          productId: item.productId || undefined,
+          productName: item.productName,
+          quantity: item.quantity,
+          unit: item.unit,
+          unitPrice: item.unitPrice,
+        })),
+      });
+
+      setData((current) => [mapBudgetFromApi(created), ...current]);
+      closeCreateModal();
+    } catch (error) {
+      setFormError(normalizeBudgetError(error, "Não foi possível criar o orçamento."));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const openBudgetDetail = async (budgetId: string) => {
+    setDetailModalOpen(true);
+    setDetailError("");
+    setIsLoadingDetail(true);
+
+    try {
+      const budget = mapBudgetFromApi(await getBudgetById(budgetId));
+      setSelectedBudget(budget);
+      setDetailForm({
+        clientName: budget.clientName,
+        description: budget.description,
+        deliveryDate: budget.deliveryDate,
+        notes: budget.notes || "",
+        status: budget.status,
+        totalPrice: budget.finalPrice,
+      });
+    } catch (error) {
+      setSelectedBudget(null);
+      setDetailError(normalizeBudgetError(error, "Não foi possível carregar os detalhes do orçamento."));
+    } finally {
+      setIsLoadingDetail(false);
+    }
+  };
+
+  const closeDetailModal = () => {
+    setDetailModalOpen(false);
+    setSelectedBudget(null);
+    setDetailError("");
+    setDetailForm(createInitialDetailForm());
+  };
+
+  const saveBudgetDetail = async () => {
+    if (!selectedBudget) {
+      return;
+    }
+
+    if (!detailForm.clientName.trim() || !detailForm.description.trim()) {
+      setDetailError("Cliente e descrição são obrigatórios.");
+      return;
+    }
+
+    setIsUpdatingDetail(true);
+    setDetailError("");
+
+    try {
+      const updated = mapBudgetFromApi(
+        await updateBudget(selectedBudget.id, {
+          clientName: detailForm.clientName.trim(),
+          description: detailForm.description.trim(),
+          deliveryDate: detailForm.deliveryDate
+            ? new Date(`${detailForm.deliveryDate}T00:00:00`).toISOString()
+            : null,
+          notes: detailForm.notes.trim() ? detailForm.notes.trim() : null,
+          status: detailForm.status,
+          totalPrice: detailForm.totalPrice,
+        }),
+      );
+
+      setData((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      closeDetailModal();
+    } catch (error) {
+      setDetailError(normalizeBudgetError(error, "Não foi possível atualizar o orçamento."));
+    } finally {
+      setIsUpdatingDetail(false);
+    }
+  };
+
+  const convertToOrder = async (b: BudgetRow) => {
+    console.log("vai chamar PATCH approve", b.id);
+
+    if (approvingId) {
+      return;
+    }
+
+    setApprovingId(b.id);
+    setRequestError("");
+
+    try {
+      const approved = mapBudgetFromApi(await approveBudget(b.id));
+      setData((current) => current.map((item) => (item.id === approved.id ? approved : item)));
+    } catch (error) {
+      setRequestError(normalizeBudgetError(error, "Não foi possível aprovar o orçamento."));
+    } finally {
+      setApprovingId(null);
+    }
   };
 
   const addClause = () => {
@@ -313,8 +590,10 @@ const BudgetsPage = () => {
     setContractFormError("");
   };
 
-  const openContractModal = (budget: Budget) => {
-    const linkedClient = clients.find((client) => client.id === budget.clientId);
+  const openContractModal = (budget: BudgetRow) => {
+    const linkedClient =
+      clients.find((client) => client.id === budget.clientId) ||
+      clients.find((client) => client.name === budget.clientName);
 
     setSelectedBudgetForContract(budget);
     setContractFormError("");
@@ -332,7 +611,7 @@ const BudgetsPage = () => {
     setContractModalOpen(true);
   };
 
-  const generateBudgetPdf = async (budget: Budget) => {
+  const generateBudgetPdf = async (budget: BudgetRow) => {
     setGeneratingPdfId(budget.id);
 
     try {
@@ -733,15 +1012,24 @@ const BudgetsPage = () => {
   const columns = [
     { key: "createdAt", header: "Data", mono: true },
     { key: "clientName", header: "Cliente" },
-    { key: "materialCost", header: "Materiais", mono: true, render: (b: Budget) => `R$ ${b.materialCost.toFixed(2)}` },
-    { key: "laborCost", header: "Mão de Obra", mono: true, render: (b: Budget) => `R$ ${b.laborCost.toFixed(2)}` },
-    { key: "profitMargin", header: "Margem", mono: true, render: (b: Budget) => `${(b.profitMargin * 100).toFixed(0)}%` },
-    { key: "finalPrice", header: "Preço Final", mono: true, render: (b: Budget) => `R$ ${b.finalPrice.toFixed(2)}` },
-    { key: "status", header: "Status", render: (b: Budget) => <StatusBadge status={b.status} /> },
+    { key: "description", header: "Descrição" },
+    { key: "finalPrice", header: "Preço Final", mono: true, render: (b: BudgetRow) => `R$ ${b.finalPrice.toFixed(2)}` },
+    { key: "deliveryDate", header: "Entrega", mono: true, render: (b: BudgetRow) => b.deliveryDate || "-" },
+    { key: "status", header: "Status", render: (b: BudgetRow) => <StatusBadge status={b.status} /> },
     {
       key: "actions", header: "",
-      render: (b: Budget) => (
+      render: (b: BudgetRow) => (
         <div className="flex items-center gap-2">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              void openBudgetDetail(b.id);
+            }}
+            className="px-2 py-1 text-[11px] font-bold rounded border border-border text-foreground hover:bg-secondary transition-colors"
+          >
+            DETALHE
+          </button>
+
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -763,12 +1051,17 @@ const BudgetsPage = () => {
             CONTRATO
           </button>
 
-          {(b.status === "draft" || b.status === "sent") && (
+          {(b.status === "draft" || b.status === "pending") && (
             <button
-              onClick={(e) => { e.stopPropagation(); convertToOrder(b); }}
-              className="px-2 py-1 text-[11px] font-bold rounded bg-success/20 text-success hover:bg-success/30 transition-colors"
+              onClick={(e) => {
+                e.stopPropagation();
+                console.log("clicou aprovar", b.id);
+                void convertToOrder(b);
+              }}
+              disabled={approvingId === b.id}
+              className="px-2 py-1 text-[11px] font-bold rounded bg-success/20 text-success hover:bg-success/30 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              APROVAR
+              {approvingId === b.id ? "APROVANDO..." : "APROVAR"}
             </button>
           )}
         </div>
@@ -785,13 +1078,55 @@ const BudgetsPage = () => {
         </button>
       }
     >
-      <div className="animate-fade-in">
-        <DataTable columns={columns} data={data} />
+      <div className="animate-fade-in space-y-4">
+        {requestError && (
+          <div className="border border-destructive/40 bg-destructive/10 rounded px-3 py-2 text-sm text-destructive flex items-center justify-between gap-3">
+            <span>{requestError}</span>
+            <button
+              onClick={() => void loadBudgetsFromApi()}
+              className="px-2 py-1 text-[11px] font-bold rounded border border-destructive/30 hover:bg-destructive/20"
+            >
+              TENTAR NOVAMENTE
+            </button>
+          </div>
+        )}
+
+        <DataTable
+          columns={columns}
+          data={data}
+          onRowClick={(row) => {
+            void openBudgetDetail(row.id);
+          }}
+          emptyMessage={isLoading ? "Carregando orçamentos..." : "Nenhum orçamento encontrado."}
+        />
       </div>
 
-      <Modal open={modal} onClose={() => setModal(false)} title="Novo Orçamento" width="max-w-2xl">
+      <Modal open={modal} onClose={closeCreateModal} title="Novo Orçamento" width="max-w-2xl">
         <div className="space-y-6">
           <FormField label="Cliente" as="select" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={clients.map(c => ({ value: c.id, label: c.name }))} />
+
+          <FormField
+            label="Descrição"
+            as="textarea"
+            value={form.description}
+            onChange={(e) => setForm({ ...form, description: e.target.value })}
+            placeholder="Descreva o orçamento"
+          />
+
+          <div className="grid grid-cols-2 gap-4">
+            <FormField
+              label="Entrega"
+              type="date"
+              value={form.deliveryDate}
+              onChange={(e) => setForm({ ...form, deliveryDate: e.target.value })}
+            />
+            <FormField
+              label="Observações"
+              value={form.notes}
+              onChange={(e) => setForm({ ...form, notes: e.target.value })}
+              placeholder="Opcional"
+            />
+          </div>
 
           <div>
             <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-3">Itens</p>
@@ -843,11 +1178,117 @@ const BudgetsPage = () => {
             </div>
           </div>
 
+          {formError && <p className="text-sm text-destructive">{formError}</p>}
+
           <div className="flex justify-end gap-3">
-            <button onClick={() => setModal(false)} className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground">Cancelar</button>
-            <button onClick={saveBudget} className="px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity">Criar Orçamento</button>
+            <button onClick={closeCreateModal} className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground">Cancelar</button>
+            <button
+              onClick={() => void saveBudget()}
+              disabled={isSaving}
+              className="px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {isSaving ? "Salvando..." : "Criar Orçamento"}
+            </button>
           </div>
         </div>
+      </Modal>
+
+      <Modal
+        open={detailModalOpen}
+        onClose={closeDetailModal}
+        title={`Detalhe do Orçamento ${selectedBudget ? `#${selectedBudget.id}` : ""}`}
+        width="max-w-2xl"
+      >
+        {isLoadingDetail ? (
+          <p className="text-sm text-muted-foreground">Carregando detalhes...</p>
+        ) : (
+          <div className="space-y-4">
+            {detailError && (
+              <div className="border border-destructive/40 bg-destructive/10 rounded px-3 py-2 text-sm text-destructive">
+                {detailError}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <FormField
+                label="Cliente"
+                value={detailForm.clientName}
+                onChange={(e) => setDetailForm((current) => ({ ...current, clientName: e.target.value }))}
+              />
+
+              <FormField
+                label="Status"
+                as="select"
+                value={detailForm.status}
+                onChange={(e) =>
+                  setDetailForm((current) => ({
+                    ...current,
+                    status: e.target.value as BudgetStatus,
+                  }))
+                }
+                options={[
+                  { value: "draft", label: "Rascunho" },
+                  { value: "pending", label: "Pendente" },
+                  { value: "approved", label: "Aprovado" },
+                  { value: "rejected", label: "Rejeitado" },
+                ]}
+              />
+            </div>
+
+            <FormField
+              label="Descrição"
+              as="textarea"
+              value={detailForm.description}
+              onChange={(e) => setDetailForm((current) => ({ ...current, description: e.target.value }))}
+            />
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <FormField
+                label="Entrega"
+                type="date"
+                value={detailForm.deliveryDate}
+                onChange={(e) => setDetailForm((current) => ({ ...current, deliveryDate: e.target.value }))}
+              />
+
+              <FormField
+                label="Preço Total (R$)"
+                type="number"
+                min={0}
+                step="0.01"
+                value={detailForm.totalPrice}
+                onChange={(e) =>
+                  setDetailForm((current) => ({
+                    ...current,
+                    totalPrice: Number(e.target.value),
+                  }))
+                }
+              />
+            </div>
+
+            <FormField
+              label="Observações"
+              as="textarea"
+              value={detailForm.notes}
+              onChange={(e) => setDetailForm((current) => ({ ...current, notes: e.target.value }))}
+            />
+
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={closeDetailModal}
+                className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground"
+              >
+                Fechar
+              </button>
+              <button
+                onClick={() => void saveBudgetDetail()}
+                disabled={isUpdatingDetail || isLoadingDetail}
+                className="px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isUpdatingDetail ? "Salvando..." : "Salvar Alterações"}
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       <Modal

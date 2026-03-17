@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DashboardLayout } from "@/layouts/DashboardLayout";
 import { DataTable } from "@/components/DataTable";
 import { Modal } from "@/components/Modal";
 import { FormField } from "@/components/FormField";
 import { products as initialProducts, Product } from "@/data/mockData";
+import { INVENTORY_REFRESH_EVENT, type InventoryRefreshEventDetail } from "@/lib/inventory-events";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 
 const emptyProduct: Omit<Product, "id"> = { name: "", category: "", unit: "unidade", price: 0, stock: 0, minStock: 0, supplier: "" };
@@ -15,6 +16,58 @@ const ProductsPage = () => {
   const [modal, setModal] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
   const [form, setForm] = useState(emptyProduct);
+  const [syncNotice, setSyncNotice] = useState("");
+  const processedProductionIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const handleInventoryRefresh = (event: Event) => {
+      const detail = (event as CustomEvent<InventoryRefreshEventDetail>).detail;
+
+      if (!detail || !detail.productionId || processedProductionIdsRef.current.has(detail.productionId)) {
+        return;
+      }
+
+      processedProductionIdsRef.current.add(detail.productionId);
+
+      const quantityByProduct = detail.materials.reduce<Record<string, number>>((acc, material) => {
+        if (!material.productId) {
+          return acc;
+        }
+
+        const quantity = Number(material.quantity);
+
+        if (!Number.isFinite(quantity) || quantity <= 0) {
+          return acc;
+        }
+
+        acc[material.productId] = (acc[material.productId] || 0) + quantity;
+        return acc;
+      }, {});
+
+      setData((current) =>
+        current.map((product) => {
+          const consumed = quantityByProduct[product.id] || 0;
+
+          if (consumed <= 0) {
+            return product;
+          }
+
+          return {
+            ...product,
+            stock: Math.max(0, product.stock - consumed),
+          };
+        }),
+      );
+
+      setSyncNotice(`Estoque atualizado apos aprovacao da producao ${detail.productionId}.`);
+    };
+
+    window.addEventListener(INVENTORY_REFRESH_EVENT, handleInventoryRefresh as EventListener);
+
+    return () => {
+      window.removeEventListener(INVENTORY_REFRESH_EVENT, handleInventoryRefresh as EventListener);
+    };
+  }, []);
 
   const openNew = () => { setEditing(null); setForm(emptyProduct); setModal(true); };
   const openEdit = (p: Product) => { setEditing(p); setForm(p); setModal(true); };
@@ -58,6 +111,12 @@ const ProductsPage = () => {
       }
     >
       <div className="animate-fade-in">
+        {syncNotice && (
+          <div className="mb-4 border border-success/30 bg-success/10 rounded px-3 py-2 text-sm text-success">
+            {syncNotice}
+          </div>
+        )}
+
         <DataTable
           columns={columns}
           data={data}

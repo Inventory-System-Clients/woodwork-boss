@@ -1,25 +1,33 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DashboardLayout } from "@/layouts/DashboardLayout";
 import { DataTable } from "@/components/DataTable";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Modal } from "@/components/Modal";
 import { FormField } from "@/components/FormField";
+import { toast } from "@/components/ui/use-toast";
+import { dispatchInventoryRefresh } from "@/lib/inventory-events";
 import { useAuth, useRoleAccess } from "@/auth/AuthProvider";
 import { clients, products, orders as mockOrders, ProductionMaterial } from "@/data/mockData";
 import { listTeams } from "@/services/teams";
 import {
+  CompleteProductionError,
+  CompleteProductionStockDetail,
   EmployeeProduction,
   ProductionStatus,
   completeProduction,
   createProduction,
+  formatStockDetailMessage,
   listProductions,
 } from "@/services/productions";
 import { Plus, Trash2 } from "lucide-react";
 
-const statuses: ProductionStatus[] = ["pending", "cutting", "assembly", "finishing", "quality_check", "delivered"];
+const statuses: ProductionStatus[] = ["pending", "cutting", "assembly", "finishing", "quality_check", "approved", "delivered"];
 const apiBaseUrl = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 const isDevelopment = import.meta.env.DEV;
 const isApiConfigured = Boolean(apiBaseUrl);
+
+const isFinalizedStatus = (status: ProductionStatus) =>
+  status === "approved" || status === "delivered";
 
 interface TeamOption {
   id: string;
@@ -67,6 +75,10 @@ const ProductionPage = () => {
   const [formError, setFormError] = useState("");
   const [form, setForm] = useState(createInitialForm);
   const [newMaterial, setNewMaterial] = useState({ productId: "", quantity: 1 });
+  const [selectedToComplete, setSelectedToComplete] = useState<EmployeeProduction | null>(null);
+  const [completionError, setCompletionError] = useState("");
+  const [completionDetails, setCompletionDetails] = useState<CompleteProductionStockDetail[]>([]);
+  const completionInFlightRef = useRef<string | null>(null);
 
   const formatCurrency = (value: number) =>
     value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -193,6 +205,29 @@ const ProductionPage = () => {
     setNewMaterial({ productId: "", quantity: 1 });
   };
 
+  const clearCompletionFeedback = () => {
+    setCompletionError("");
+    setCompletionDetails([]);
+  };
+
+  const openCompleteModal = (order: EmployeeProduction) => {
+    if (updatingId) {
+      return;
+    }
+
+    clearCompletionFeedback();
+    setSelectedToComplete(order);
+  };
+
+  const closeCompleteModal = (force = false) => {
+    if (!force && updatingId) {
+      return;
+    }
+
+    setSelectedToComplete(null);
+    clearCompletionFeedback();
+  };
+
   const saveProduction = async () => {
     if (!canCreateProduction) {
       setFormError("Seu perfil não possui permissão para criar produção.");
@@ -254,34 +289,93 @@ const ProductionPage = () => {
     }
   };
 
-  const completeProject = async (orderId: string) => {
-    if (!canCompleteProduction) {
+  const completeProject = async () => {
+    if (!canCompleteProduction || !selectedToComplete) {
       return;
     }
 
+    const orderId = selectedToComplete.id;
+
+    if (completionInFlightRef.current) {
+      return;
+    }
+
+    completionInFlightRef.current = orderId;
+
     setRequestError("");
+    clearCompletionFeedback();
+    setUpdatingId(orderId);
 
     if (isMockMode) {
       setData((current) =>
         current.map((order) =>
-          order.id === orderId ? { ...order, productionStatus: "delivered" } : order,
+          order.id === orderId ? { ...order, productionStatus: "approved" } : order,
         ),
       );
+      closeCompleteModal(true);
+      toast({
+        title: "Produção aprovada",
+        description: "Produção aprovada com sucesso.",
+      });
+      completionInFlightRef.current = null;
+      setUpdatingId(null);
       return;
     }
 
-    setUpdatingId(orderId);
-
     try {
       await completeProduction(orderId);
+
+      setData((current) =>
+        current.map((order) =>
+          order.id === orderId ? { ...order, productionStatus: "approved" } : order,
+        ),
+      );
+
       await loadProductions();
+
+      dispatchInventoryRefresh({
+        productionId: orderId,
+        source: "production-approve",
+        status: "approved",
+        materials: selectedToComplete.materials,
+      });
+
+      closeCompleteModal(true);
+      toast({
+        title: "Produção aprovada",
+        description: "Produção aprovada com sucesso e lista revalidada.",
+      });
     } catch (error) {
+      if (error instanceof CompleteProductionError) {
+        setCompletionError(error.message);
+        setCompletionDetails(error.details);
+
+        toast({
+          variant: "destructive",
+          title: "Não foi possível aprovar a produção",
+          description:
+            error.code === "insufficient_stock" && error.details.length > 0
+              ? formatStockDetailMessage(error.details[0])
+              : error.message,
+        });
+
+        return;
+      }
+
       const message = error instanceof Error ? error.message : "Falha ao concluir projeto.";
-      setRequestError(`Não foi possível atualizar no banco: ${message}`);
+      setCompletionError(message);
+      toast({
+        variant: "destructive",
+        title: "Não foi possível aprovar a produção",
+        description: message,
+      });
     } finally {
+      completionInFlightRef.current = null;
       setUpdatingId(null);
     }
   };
+
+  const isCompletingSelected = Boolean(selectedToComplete && updatingId === selectedToComplete.id);
 
   const columns = [
     { key: "clientName", header: "Cliente" },
@@ -314,19 +408,22 @@ const ProductionPage = () => {
             key: "actions",
             header: "",
             render: (o: EmployeeProduction) =>
-              o.productionStatus !== "delivered" ? (
+              !isFinalizedStatus(o.productionStatus) ? (
                 <button
-                  disabled={updatingId === o.id}
+                  disabled={Boolean(updatingId)}
                   onClick={(e) => {
                     e.stopPropagation();
-                    void completeProject(o.id);
+                    console.log("clicou aprovar", o.id);
+                    openCompleteModal(o);
                   }}
                   className="px-2 py-1 text-[11px] font-bold rounded bg-success/20 text-success hover:bg-success/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {updatingId === o.id ? "SALVANDO..." : "CONCLUIR"}
+                  {updatingId === o.id ? "SALVANDO..." : "APROVAR/CONCLUIR"}
                 </button>
               ) : (
-                <span className="text-[11px] text-success font-bold">✓ CONCLUÍDO</span>
+                <span className="text-[11px] text-success font-bold">
+                  {o.productionStatus === "approved" ? "✓ APROVADO" : "✓ ENTREGUE"}
+                </span>
               ),
           },
         ]
@@ -515,6 +612,66 @@ const ProductionPage = () => {
                 className="px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {isSaving ? "Salvando..." : "Criar Produção"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {canCompleteProduction && selectedToComplete && (
+        <Modal
+          open={Boolean(selectedToComplete)}
+          onClose={() => closeCompleteModal()}
+          title="Aprovar/Concluir Produção"
+          width="max-w-xl"
+        >
+          <div className="space-y-4">
+            <p className="text-sm text-foreground/90">
+              Ao aprovar/concluir, o backend finaliza a producao e baixa automaticamente o estoque dos materiais utilizados.
+            </p>
+
+            <div className="rounded border border-border bg-secondary/20 px-3 py-2 text-sm space-y-1">
+              <p>
+                <span className="text-muted-foreground">Cliente:</span> {selectedToComplete.clientName}
+              </p>
+              <p>
+                <span className="text-muted-foreground">Projeto:</span> {selectedToComplete.description}
+              </p>
+            </div>
+
+            {completionError && (
+              <div className="rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive space-y-2">
+                <p>{completionError}</p>
+
+                {completionDetails.length > 0 && (
+                  <ul className="list-disc pl-4 space-y-1 text-xs">
+                    {completionDetails.map((detail, index) => (
+                      <li key={`${detail.productId}-${index}`}>{formatStockDetailMessage(detail)}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={() => closeCompleteModal()}
+                disabled={isCompletingSelected}
+                className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => {
+                  if (selectedToComplete?.id) {
+                    console.log("clicou aprovar", selectedToComplete.id);
+                  }
+                  void completeProject();
+                }}
+                disabled={isCompletingSelected}
+                className="px-4 py-2 text-sm rounded bg-success text-success-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isCompletingSelected ? "Aprovando..." : "Aprovar/Concluir"}
               </button>
             </div>
           </div>

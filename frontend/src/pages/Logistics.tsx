@@ -29,6 +29,9 @@ const apiBaseUrl = (import.meta.env.VITE_API_URL || "").trim().replace(/\/$/, ""
 const isDevelopment = import.meta.env.DEV;
 const isApiConfigured = Boolean(apiBaseUrl);
 
+const isFinalizedProduction = (status: EmployeeProduction["productionStatus"]) =>
+  status === "approved" || status === "delivered";
+
 const healthStatusStyles: Record<DeliveryHealthStatus, string> = {
   late: "bg-destructive/20 text-destructive",
   near_due: "bg-amber-500/20 text-amber-300",
@@ -210,7 +213,7 @@ const LogisticsPage = () => {
   }, []);
 
   const activeProductions = useMemo(
-    () => productions.filter((item) => item.productionStatus !== "delivered"),
+    () => productions.filter((item) => !isFinalizedProduction(item.productionStatus)),
     [productions],
   );
 
