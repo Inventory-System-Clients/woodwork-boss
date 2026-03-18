@@ -7,7 +7,8 @@ import { FormField } from "@/components/FormField";
 import { toast } from "@/components/ui/use-toast";
 import { dispatchInventoryRefresh } from "@/lib/inventory-events";
 import { useAuth, useRoleAccess } from "@/auth/AuthProvider";
-import { clients, orders as mockOrders, ProductionMaterial } from "@/data/mockData";
+import { orders as mockOrders, ProductionMaterial } from "@/data/mockData";
+import { Client, listClients } from "@/services/clients";
 import { Product, listProducts } from "@/services/products";
 import { listTeams } from "@/services/teams";
 import {
@@ -50,6 +51,33 @@ const createMockTeamsSnapshot = (): TeamOption[] => {
   }));
 };
 
+const createMockClientsSnapshot = (): Client[] => {
+  const names = Array.from(new Set(mockOrders.map((order) => order.clientName).filter(Boolean)));
+
+  return names.map((name, index) => ({
+    id: `mock-client-${index + 1}`,
+    name,
+    companyName: null,
+    document: null,
+    contactName: null,
+    email: null,
+    phone: null,
+    secondaryPhone: null,
+    street: null,
+    number: null,
+    complement: null,
+    neighborhood: null,
+    city: null,
+    state: null,
+    postalCode: null,
+    notes: null,
+    isActive: true,
+    metadata: {},
+    createdAt: "",
+    updatedAt: "",
+  }));
+};
+
 const createInitialForm = () => ({
   clientId: "",
   description: "",
@@ -73,8 +101,11 @@ const ProductionPage = () => {
   const [modeNotice, setModeNotice] = useState("");
   const [isMockMode, setIsMockMode] = useState(false);
   const [teams, setTeams] = useState<TeamOption[]>([]);
+  const [clientsCatalog, setClientsCatalog] = useState<Client[]>([]);
   const [productsCatalog, setProductsCatalog] = useState<Product[]>([]);
+  const [isLoadingClients, setIsLoadingClients] = useState(false);
   const [isLoadingProducts, setIsLoadingProducts] = useState(false);
+  const [clientsError, setClientsError] = useState("");
   const [productsError, setProductsError] = useState("");
   const [formError, setFormError] = useState("");
   const [form, setForm] = useState(createInitialForm);
@@ -176,6 +207,34 @@ const ProductionPage = () => {
     }
   };
 
+  const loadClientsForForm = async () => {
+    if (!canCreateProduction) {
+      setClientsCatalog([]);
+      setClientsError("");
+      setIsLoadingClients(false);
+      return;
+    }
+
+    setIsLoadingClients(true);
+    setClientsError("");
+
+    try {
+      const clients = await listClients();
+      setClientsCatalog(clients);
+    } catch (error) {
+      if (isDevelopment) {
+        setClientsCatalog(createMockClientsSnapshot());
+        setClientsError("");
+      } else {
+        setClientsCatalog([]);
+        const message = error instanceof Error ? error.message : "Falha ao carregar clientes.";
+        setClientsError(`Nao foi possivel carregar clientes: ${message}`);
+      }
+    } finally {
+      setIsLoadingClients(false);
+    }
+  };
+
   useEffect(() => {
     void loadProductions();
     void loadTeams();
@@ -187,6 +246,7 @@ const ProductionPage = () => {
     }
 
     void loadProductsForForm();
+    void loadClientsForForm();
   }, [modal, canCreateProduction]);
 
   const addMaterial = () => {
@@ -252,6 +312,7 @@ const ProductionPage = () => {
   const openCreateModal = () => {
     setModal(true);
     setFormError("");
+    void loadClientsForForm();
     void loadProductsForForm();
   };
 
@@ -305,13 +366,19 @@ const ProductionPage = () => {
       return;
     }
 
-    const client = clients.find((c) => c.id === form.clientId);
+    const client = clientsCatalog.find((c) => c.id === form.clientId);
+
+    if (!client) {
+      setFormError("Selecione um cliente valido cadastrado no banco.");
+      return;
+    }
+
     const selectedTeam = teams.find((team) => team.id === form.installationTeamId);
 
     if (isMockMode) {
       const newOrder: EmployeeProduction = {
         id: `mock-${Date.now()}`,
-        clientName: client?.name || "Cliente não informado",
+        clientName: client.name,
         description: form.description.trim(),
         productionStatus: "pending",
         deliveryDate: form.deliveryDate,
@@ -330,7 +397,7 @@ const ProductionPage = () => {
 
     try {
       await createProduction({
-        clientName: client?.name || "Cliente não informado",
+        clientName: client.name,
         description: form.description.trim(),
         deliveryDate: form.deliveryDate ? new Date(`${form.deliveryDate}T00:00:00`).toISOString() : null,
         installationTeamId: form.installationTeamId,
@@ -539,15 +606,19 @@ const ProductionPage = () => {
       </div>
 
       {canCreateProduction && (
-        <Modal open={modal} onClose={closeModal} title="Nova Produção" width="max-w-3xl">
-          <div className="space-y-6">
+        <Modal open={modal} onClose={closeModal} title="Nova Produção" width="max-w-5xl">
+          <div className="flex max-h-[72dvh] flex-col">
+            <div className="space-y-6 overflow-y-auto pr-1">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <FormField
                 label="Cliente"
                 as="select"
                 value={form.clientId}
                 onChange={(e) => setForm((current) => ({ ...current, clientId: e.target.value }))}
-                options={clients.map((c) => ({ value: c.id, label: c.name }))}
+                options={clientsCatalog.map((client) => ({
+                  value: client.id,
+                  label: client.companyName ? `${client.name} • ${client.companyName}` : client.name,
+                }))}
               />
               <FormField
                 label="Prazo de Entrega"
@@ -592,6 +663,24 @@ const ProductionPage = () => {
                 Materiais que serão usados
               </p>
 
+              {clientsError && (
+                <div className="mb-3 border border-destructive/40 bg-destructive/10 rounded px-3 py-2 text-sm text-destructive flex items-center justify-between gap-3">
+                  <span>{clientsError}</span>
+                  <button
+                    onClick={() => void loadClientsForForm()}
+                    className="px-2 py-1 text-[11px] font-bold rounded border border-destructive/30 hover:bg-destructive/20"
+                  >
+                    TENTAR NOVAMENTE
+                  </button>
+                </div>
+              )}
+
+              {!isLoadingClients && clientsCatalog.length === 0 && (
+                <p className="mb-3 text-xs text-destructive">
+                  Nenhum cliente cadastrado no banco. Cadastre um cliente antes de criar a producao.
+                </p>
+              )}
+
               {productsError && (
                 <div className="mb-3 border border-destructive/40 bg-destructive/10 rounded px-3 py-2 text-sm text-destructive flex items-center justify-between gap-3">
                   <span>{productsError}</span>
@@ -607,7 +696,7 @@ const ProductionPage = () => {
               {form.materials.length > 0 && (
                 <div className="border border-border rounded mb-3 divide-y divide-border/50">
                   {form.materials.map((item, idx) => (
-                    <div key={`${item.productId}-${idx}`} className="flex items-center justify-between px-3 py-2 text-sm">
+                    <div key={`${item.productId}-${idx}`} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
                       <span>
                         {item.productName} x {item.quantity} {item.unit}
                       </span>
@@ -635,7 +724,7 @@ const ProductionPage = () => {
                     }))}
                   />
                 </div>
-                <div className="w-28">
+                <div className="w-full md:w-28">
                   <FormField
                     label="Quantidade"
                     type="number"
@@ -645,7 +734,7 @@ const ProductionPage = () => {
                     onChange={(e) => setNewMaterial((current) => ({ ...current, quantity: Number(e.target.value) }))}
                   />
                 </div>
-                <div className="w-28">
+                <div className="w-full md:w-28">
                   <FormField
                     label="Unidade"
                     value={newMaterial.unit}
@@ -676,18 +765,27 @@ const ProductionPage = () => {
                 <p className="font-mono font-bold text-primary text-lg">{formatCurrency(form.initialCost || 0)}</p>
               </div>
             </div>
+            </div>
 
-            <div className="flex justify-end gap-3">
+            <div className="sticky bottom-0 z-10 mt-4 pt-3 border-t border-border bg-card/95 backdrop-blur flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3">
               <button
                 onClick={closeModal}
-                className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground"
+                className="w-full sm:w-auto px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground"
               >
                 Cancelar
               </button>
               <button
                 onClick={() => void saveProduction()}
-                disabled={isSaving || isLoadingTeams || isLoadingProducts || teams.length === 0 || productsCatalog.length === 0}
-                className="px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
+                disabled={
+                  isSaving ||
+                  isLoadingTeams ||
+                  isLoadingClients ||
+                  isLoadingProducts ||
+                  teams.length === 0 ||
+                  clientsCatalog.length === 0 ||
+                  productsCatalog.length === 0
+                }
+                className="w-full sm:w-auto px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {isSaving ? "Salvando..." : "Criar Produção"}
               </button>

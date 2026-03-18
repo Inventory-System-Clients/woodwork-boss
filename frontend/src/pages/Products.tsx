@@ -19,11 +19,13 @@ import { Plus, Pencil } from "lucide-react";
 interface ProductFormState {
   name: string;
   stockQuantity: number;
+  lowStockAlertQuantity: number;
 }
 
 const emptyForm: ProductFormState = {
   name: "",
   stockQuantity: 0,
+  lowStockAlertQuantity: 0,
 };
 
 const formatDateTime = (value: string) => {
@@ -67,11 +69,13 @@ const buildProductsSaveErrorMessage = (error: unknown, isEditing: boolean) => {
   if (error instanceof ApiError) {
     switch (error.status) {
       case 400:
-        return "Dados inválidos. Revise nome e estoque informado.";
+        return "Dados inválidos. Revise nome, estoque e limite de alerta.";
       case 403:
         return "Acesso negado para alterar produtos.";
       case 404:
         return isEditing ? "Produto não encontrado." : "Registro não encontrado.";
+      case 409:
+        return "Já existe um produto com os mesmos dados.";
       case 500:
         return "Erro interno no servidor ao salvar o produto.";
       default:
@@ -151,6 +155,7 @@ const ProductsPage = () => {
     setForm({
       name: product.name,
       stockQuantity: product.stockQuantity,
+      lowStockAlertQuantity: product.lowStockAlertQuantity,
     });
     setFormError("");
     setModalOpen(true);
@@ -177,9 +182,15 @@ const ProductsPage = () => {
 
   const saveProduct = async () => {
     const name = form.name.trim();
+    const lowStockAlertQuantity = Math.trunc(Number(form.lowStockAlertQuantity));
 
     if (!name) {
       setFormError("Informe o nome do produto.");
+      return;
+    }
+
+    if (!Number.isFinite(lowStockAlertQuantity) || lowStockAlertQuantity < 0) {
+      setFormError("Informe um limite de alerta válido (mínimo 0).");
       return;
     }
 
@@ -193,21 +204,20 @@ const ProductsPage = () => {
 
     try {
       if (editing) {
-        const updated = await updateProduct(editing.id, { name });
-
-        setData((current) =>
-          current.map((item) => (item.id === updated.id ? updated : item)),
-        );
+        await updateProduct(editing.id, {
+          name,
+          lowStockAlertQuantity,
+        });
       } else {
-        const created = await createProduct({
+        await createProduct({
           name,
           stockQuantity: Math.trunc(Number(form.stockQuantity)),
+          lowStockAlertQuantity,
         });
-
-        setData((current) => [created, ...current.filter((item) => item.id !== created.id)]);
       }
 
       closeModal();
+      await loadProducts(activeSearch);
     } catch (error) {
       setFormError(buildProductsSaveErrorMessage(error, Boolean(editing)));
 
@@ -222,6 +232,24 @@ const ProductsPage = () => {
   const columns = [
     { key: "name", header: "Produto" },
     { key: "stockQuantity", header: "Estoque Atual", mono: true },
+    { key: "lowStockAlertQuantity", header: "Limite Alerta", mono: true },
+    {
+      key: "stockAlert",
+      header: "Situação",
+      render: (item: Product) => {
+        const isLowStock = item.stockQuantity <= item.lowStockAlertQuantity;
+
+        return (
+          <span
+            className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider ${
+              isLowStock ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"
+            }`}
+          >
+            {isLowStock ? "Baixo" : "OK"}
+          </span>
+        );
+      },
+    },
     {
       key: "createdAt",
       header: "Criado em",
@@ -326,7 +354,9 @@ const ProductsPage = () => {
                 : "Nenhum produto cadastrado no banco."
           }
           rowHighlight={(item: Product) =>
-            item.stockQuantity <= 0 ? "border-l-2 border-l-primary" : ""
+            item.stockQuantity <= item.lowStockAlertQuantity
+              ? "border-l-2 border-l-destructive"
+              : ""
           }
         />
       </div>
@@ -345,26 +375,54 @@ const ProductsPage = () => {
           />
 
           {editing ? (
-            <FormField
-              label="Estoque Atual"
-              type="number"
-              value={String(editing.stockQuantity)}
-              disabled
-              readOnly
-            />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <FormField
+                label="Estoque Atual"
+                type="number"
+                value={String(editing.stockQuantity)}
+                disabled
+                readOnly
+              />
+              <FormField
+                label="Limite para alerta"
+                type="number"
+                min={0}
+                value={form.lowStockAlertQuantity}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    lowStockAlertQuantity: Number(event.target.value),
+                  }))
+                }
+              />
+            </div>
           ) : (
-            <FormField
-              label="Estoque Inicial"
-              type="number"
-              min={0}
-              value={form.stockQuantity}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  stockQuantity: Number(event.target.value),
-                }))
-              }
-            />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <FormField
+                label="Estoque Inicial"
+                type="number"
+                min={0}
+                value={form.stockQuantity}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    stockQuantity: Number(event.target.value),
+                  }))
+                }
+              />
+              <FormField
+                label="Limite para alerta"
+                type="number"
+                min={0}
+                value={form.lowStockAlertQuantity}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    lowStockAlertQuantity: Number(event.target.value),
+                  }))
+                }
+              />
+            </div>
           )}
 
           {formError && <p className="text-sm text-destructive">{formError}</p>}

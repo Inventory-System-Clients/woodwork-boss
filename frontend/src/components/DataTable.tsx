@@ -24,14 +24,14 @@ export function DataTable<T extends { id: string }>({
   rowHighlight,
 }: DataTableProps<T>) {
   return (
-    <div className="w-full overflow-hidden border border-border rounded bg-card">
-      <table className="w-full text-left border-collapse">
+    <div className="w-full overflow-x-auto overflow-y-hidden border border-border rounded bg-card">
+      <table className="w-full min-w-[640px] text-left border-collapse">
         <thead>
           <tr className="border-b border-border bg-secondary/30">
             {columns.map((col) => (
               <th
                 key={col.key}
-                className="px-4 py-3 text-[10px] uppercase tracking-widest text-muted-foreground font-bold"
+                className="px-3 sm:px-4 py-2 sm:py-3 text-[10px] uppercase tracking-widest text-muted-foreground font-bold"
               >
                 {col.header}
               </th>
@@ -41,7 +41,7 @@ export function DataTable<T extends { id: string }>({
         <tbody className="divide-y divide-border/50">
           {data.length === 0 ? (
             <tr>
-              <td colSpan={columns.length} className="px-4 py-8 text-center text-muted-foreground text-sm">
+              <td colSpan={columns.length} className="px-3 sm:px-4 py-8 text-center text-muted-foreground text-sm">
                 {emptyMessage}
               </td>
             </tr>
@@ -57,7 +57,7 @@ export function DataTable<T extends { id: string }>({
                 {columns.map((col) => (
                   <td
                     key={col.key}
-                    className={`px-4 py-3 text-sm ${
+                    className={`px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm ${
                       col.mono ? "font-mono tabular-nums" : ""
                     } text-foreground/90 ${col.className || ""}`}
                   >

@@ -4,7 +4,7 @@ import { DataTable } from "@/components/DataTable";
 import { Modal } from "@/components/Modal";
 import { FormField } from "@/components/FormField";
 import { StatusBadge } from "@/components/StatusBadge";
-import { clients, calculateBudget } from "@/data/mockData";
+import { calculateBudget } from "@/data/mockData";
 import { ApiError } from "@/services/api";
 import { dispatchInventoryDataChanged } from "@/lib/inventory-events";
 import {
@@ -20,6 +20,7 @@ import {
   type BudgetMaterial as ApiBudgetMaterial,
   type BudgetStatus,
 } from "@/services/budgets";
+import { Client, listClients } from "@/services/clients";
 import { Product, listProducts } from "@/services/products";
 import { Plus, Trash2 } from "lucide-react";
 
@@ -139,6 +140,37 @@ const normalizeDateOnly = (value: string | null | undefined) => {
   return value.includes("T") ? value.split("T")[0] : value;
 };
 
+const normalizeName = (value: string) => value.trim().toLowerCase();
+
+const findClientByName = (clientsCatalog: Client[], clientName: string) => {
+  const normalized = normalizeName(clientName);
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  return clientsCatalog.find((client) => normalizeName(client.name) === normalized);
+};
+
+const buildClientAddress = (client: Client | undefined) => {
+  if (!client) {
+    return "";
+  }
+
+  const streetLine = [client.street, client.number].filter(Boolean).join(", ");
+  const districtLine = [
+    client.neighborhood,
+    client.city && client.state ? `${client.city}/${client.state}` : client.city || client.state,
+  ]
+    .filter(Boolean)
+    .join(" - ");
+  const trailing = [client.complement, districtLine, client.postalCode ? `CEP ${client.postalCode}` : ""]
+    .filter(Boolean)
+    .join(" • ");
+
+  return [streetLine, trailing].filter(Boolean).join(" | ");
+};
+
 const normalizeBudgetError = (error: unknown, fallback: string) => {
   if (error instanceof ApiError) {
     if (error.status === 403) {
@@ -172,7 +204,7 @@ const mapBudgetItemFromApi = (item: ApiBudgetMaterial): BudgetItemRow => ({
   subtotal: (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0),
 });
 
-const mapBudgetFromApi = (budget: ApiBudget): BudgetRow => {
+const mapBudgetFromApi = (budget: ApiBudget, clientsCatalog: Client[] = []): BudgetRow => {
   const items = budget.materials.map(mapBudgetItemFromApi);
   const materialCost = items.reduce((sum, item) => sum + item.subtotal, 0);
   const totalCost = materialCost;
@@ -180,7 +212,7 @@ const mapBudgetFromApi = (budget: ApiBudget): BudgetRow => {
   const laborCost = Math.max(0, totalCost - materialCost);
   const profitMargin = totalCost > 0 ? Math.max(0, (finalPrice - totalCost) / totalCost) : 0;
 
-  const linkedClient = clients.find((client) => client.name === budget.clientName);
+  const linkedClient = findClientByName(clientsCatalog, budget.clientName);
 
   return {
     id: budget.id,
@@ -354,6 +386,9 @@ const BudgetsPage = () => {
   const [selectedToApprove, setSelectedToApprove] = useState<BudgetRow | null>(null);
   const [approvalError, setApprovalError] = useState("");
   const [approvalDetails, setApprovalDetails] = useState<ApproveBudgetStockDetail[]>([]);
+  const [clientsCatalog, setClientsCatalog] = useState<Client[]>([]);
+  const [isLoadingClients, setIsLoadingClients] = useState(false);
+  const [clientsError, setClientsError] = useState("");
   const [detailForm, setDetailForm] = useState(createInitialDetailForm());
   const [form, setForm] = useState(createInitialBudgetForm);
   const [newItem, setNewItem] = useState({
@@ -374,13 +409,13 @@ const BudgetsPage = () => {
     clauses: createDefaultContractClauses(),
   });
 
-  const loadBudgetsFromApi = async () => {
+  const loadBudgetsFromApi = async (availableClients: Client[] = clientsCatalog) => {
     setIsLoading(true);
     setRequestError("");
 
     try {
       const budgets = await listBudgets();
-      setData(budgets.map(mapBudgetFromApi));
+      setData(budgets.map((budget) => mapBudgetFromApi(budget, availableClients)));
     } catch (error) {
       setData([]);
       setRequestError(normalizeBudgetError(error, "Não foi possível carregar os orçamentos."));
@@ -389,9 +424,52 @@ const BudgetsPage = () => {
     }
   };
 
+  const loadClientsForForms = async () => {
+    setIsLoadingClients(true);
+    setClientsError("");
+
+    try {
+      const clients = await listClients();
+      setClientsCatalog(clients);
+      return clients;
+    } catch (error) {
+      setClientsCatalog([]);
+      setClientsError(normalizeBudgetError(error, "Nao foi possivel carregar clientes para o formulario."));
+      return [] as Client[];
+    } finally {
+      setIsLoadingClients(false);
+    }
+  };
+
   useEffect(() => {
+    void loadClientsForForms();
     void loadBudgetsFromApi();
   }, []);
+
+  useEffect(() => {
+    if (clientsCatalog.length === 0) {
+      return;
+    }
+
+    setData((current) =>
+      current.map((budget) => {
+        if (budget.clientId) {
+          return budget;
+        }
+
+        const linkedClient = findClientByName(clientsCatalog, budget.clientName);
+
+        if (!linkedClient) {
+          return budget;
+        }
+
+        return {
+          ...budget,
+          clientId: linkedClient.id,
+        };
+      }),
+    );
+  }, [clientsCatalog]);
 
   const loadProductsForForm = async () => {
     setIsLoadingProducts(true);
@@ -411,6 +489,7 @@ const BudgetsPage = () => {
   const openCreateModal = () => {
     setModal(true);
     setFormError("");
+    void loadClientsForForms();
     void loadProductsForForm();
   };
 
@@ -487,7 +566,7 @@ const BudgetsPage = () => {
   };
 
   const saveBudget = async () => {
-    const client = clients.find((item) => item.id === form.clientId);
+    const client = clientsCatalog.find((item) => item.id === form.clientId);
 
     if (!client) {
       setFormError("Selecione um cliente válido.");
@@ -546,7 +625,7 @@ const BudgetsPage = () => {
     setIsLoadingDetail(true);
 
     try {
-      const budget = mapBudgetFromApi(await getBudgetById(budgetId));
+      const budget = mapBudgetFromApi(await getBudgetById(budgetId), clientsCatalog);
       setSelectedBudget(budget);
       setDetailForm({
         clientName: budget.clientName,
@@ -619,7 +698,7 @@ const BudgetsPage = () => {
     clearApprovalFeedback();
 
     try {
-      const approved = mapBudgetFromApi(await approveBudget(budgetId));
+      const approved = mapBudgetFromApi(await approveBudget(budgetId), clientsCatalog);
       setData((current) => current.map((item) => (item.id === approved.id ? approved : item)));
       closeApproveModal(true);
 
@@ -690,15 +769,15 @@ const BudgetsPage = () => {
 
   const openContractModal = (budget: BudgetRow) => {
     const linkedClient =
-      clients.find((client) => client.id === budget.clientId) ||
-      clients.find((client) => client.name === budget.clientName);
+      clientsCatalog.find((client) => client.id === budget.clientId) ||
+      findClientByName(clientsCatalog, budget.clientName);
 
     setSelectedBudgetForContract(budget);
     setContractFormError("");
     setContractForm({
       contratanteName: linkedClient?.name || budget.clientName || "",
       operationName: budget.clientName || linkedClient?.name || "",
-      projectAddress: linkedClient?.address || "",
+      projectAddress: buildClientAddress(linkedClient),
       kioskWidthMeters: 3,
       kioskDepthMeters: 4,
       contractValue: Number(budget.finalPrice.toFixed(2)),
@@ -1107,6 +1186,18 @@ const BudgetsPage = () => {
     }
   };
 
+  const detailClientOptions = clientsCatalog.map((client) => ({
+    value: client.name,
+    label: client.companyName ? `${client.name} • ${client.companyName}` : client.name,
+  }));
+
+  if (detailForm.clientName && !detailClientOptions.some((option) => option.value === detailForm.clientName)) {
+    detailClientOptions.unshift({
+      value: detailForm.clientName,
+      label: `${detailForm.clientName} (não cadastrado)`,
+    });
+  }
+
   const columns = [
     { key: "createdAt", header: "Data", mono: true },
     { key: "clientName", header: "Cliente" },
@@ -1198,9 +1289,35 @@ const BudgetsPage = () => {
         />
       </div>
 
-      <Modal open={modal} onClose={closeCreateModal} title="Novo Orçamento" width="max-w-2xl">
-        <div className="space-y-6">
-          <FormField label="Cliente" as="select" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={clients.map(c => ({ value: c.id, label: c.name }))} />
+      <Modal open={modal} onClose={closeCreateModal} title="Novo Orçamento" width="max-w-5xl">
+        <div className="flex max-h-[72dvh] flex-col">
+          <div className="space-y-6 overflow-y-auto pr-1">
+          {clientsError && (
+            <div className="mb-3 border border-destructive/40 bg-destructive/10 rounded px-3 py-2 text-sm text-destructive flex items-center justify-between gap-3">
+              <span>{clientsError}</span>
+              <button
+                onClick={() => void loadClientsForForms()}
+                className="px-2 py-1 text-[11px] font-bold rounded border border-destructive/30 hover:bg-destructive/20"
+              >
+                TENTAR NOVAMENTE
+              </button>
+            </div>
+          )}
+
+          <FormField
+            label="Cliente"
+            as="select"
+            value={form.clientId}
+            onChange={e => setForm({ ...form, clientId: e.target.value })}
+            options={clientsCatalog.map((client) => ({
+              value: client.id,
+              label: client.companyName ? `${client.name} • ${client.companyName}` : client.name,
+            }))}
+          />
+
+          {!isLoadingClients && clientsCatalog.length === 0 && (
+            <p className="text-xs text-destructive">Nenhum cliente cadastrado no banco para selecionar.</p>
+          )}
 
           <FormField
             label="Descrição"
@@ -1210,7 +1327,7 @@ const BudgetsPage = () => {
             placeholder="Descreva o orçamento"
           />
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <FormField
               label="Entrega"
               type="date"
@@ -1243,7 +1360,7 @@ const BudgetsPage = () => {
             {form.items.length > 0 && (
               <div className="border border-border rounded mb-3 divide-y divide-border/50">
                 {form.items.map((item, i) => (
-                  <div key={i} className="flex items-center justify-between px-3 py-2 text-sm">
+                  <div key={i} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
                     <span>{item.productName} × {item.quantity} {item.unit}</span>
                     <div className="flex items-center gap-3">
                       <span className="font-mono text-xs">R$ {item.subtotal.toFixed(2)}</span>
@@ -1267,7 +1384,7 @@ const BudgetsPage = () => {
                   }))}
                 />
               </div>
-              <div className="w-24">
+              <div className="w-full md:w-24">
                 <FormField
                   label="Qtd."
                   type="number"
@@ -1276,14 +1393,14 @@ const BudgetsPage = () => {
                   onChange={e => setNewItem({ ...newItem, quantity: Number(e.target.value) })}
                 />
               </div>
-              <div className="w-28">
+              <div className="w-full md:w-28">
                 <FormField
                   label="Unid."
                   value={newItem.unit}
                   onChange={e => setNewItem({ ...newItem, unit: e.target.value })}
                 />
               </div>
-              <div className="w-32">
+              <div className="w-full md:w-32">
                 <FormField
                   label="Vlr Unit."
                   type="number"
@@ -1305,13 +1422,13 @@ const BudgetsPage = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <FormField label="Mão de Obra (R$)" type="number" step="0.01" value={form.laborCost} onChange={e => setForm({ ...form, laborCost: Number(e.target.value) })} />
             <FormField label="Margem de Lucro (%)" type="number" step="1" value={form.profitMargin * 100} onChange={e => setForm({ ...form, profitMargin: Number(e.target.value) / 100 })} />
           </div>
 
           <div className="border border-border rounded p-4 bg-secondary/20">
-            <div className="grid grid-cols-3 gap-4 text-center">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-center">
               <div>
                 <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Materiais</p>
                 <p className="font-mono font-bold text-foreground">R$ {calc.materialCost.toFixed(2)}</p>
@@ -1328,13 +1445,14 @@ const BudgetsPage = () => {
           </div>
 
           {formError && <p className="text-sm text-destructive">{formError}</p>}
+          </div>
 
-          <div className="flex justify-end gap-3">
-            <button onClick={closeCreateModal} className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground">Cancelar</button>
+          <div className="sticky bottom-0 z-10 mt-4 pt-3 border-t border-border bg-card/95 backdrop-blur flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3">
+            <button onClick={closeCreateModal} className="w-full sm:w-auto px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground">Cancelar</button>
             <button
               onClick={() => void saveBudget()}
-              disabled={isSaving || isLoadingProducts}
-              className="px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
+              disabled={isSaving || isLoadingProducts || isLoadingClients || clientsCatalog.length === 0}
+              className="w-full sm:w-auto px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {isSaving ? "Salvando..." : "Criar Orçamento"}
             </button>
@@ -1419,8 +1537,10 @@ const BudgetsPage = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <FormField
                 label="Cliente"
+                as="select"
                 value={detailForm.clientName}
                 onChange={(e) => setDetailForm((current) => ({ ...current, clientName: e.target.value }))}
+                options={detailClientOptions}
               />
 
               <FormField
