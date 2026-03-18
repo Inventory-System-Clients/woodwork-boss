@@ -12,24 +12,92 @@ import { Client, listClients } from "@/services/clients";
 import { Product, listProducts } from "@/services/products";
 import { listTeams } from "@/services/teams";
 import {
+  advanceProductionStatus,
   CompleteProductionError,
   CompleteProductionStockDetail,
   EmployeeProduction,
+  ProductionShareError,
   ProductionStatus,
-  completeProduction,
+  createProductionShareLink,
   createProduction,
   formatStockDetailMessage,
   listProductions,
 } from "@/services/productions";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Share2, Trash2 } from "lucide-react";
 
 const statuses: ProductionStatus[] = ["pending", "cutting", "assembly", "finishing", "quality_check", "approved", "delivered"];
+const statusLabels: Record<ProductionStatus, string> = {
+  pending: "Pendente",
+  cutting: "Corte",
+  assembly: "Montagem",
+  finishing: "Acabamento",
+  quality_check: "Controle",
+  approved: "Aprovado",
+  delivered: "Entregue",
+};
 const apiBaseUrl = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 const isDevelopment = import.meta.env.DEV;
 const isApiConfigured = Boolean(apiBaseUrl);
 
-const isFinalizedStatus = (status: ProductionStatus) =>
-  status === "approved" || status === "delivered";
+const isFinalizedStatus = (status: ProductionStatus) => status === "delivered";
+
+const getNextStatus = (status: ProductionStatus): ProductionStatus | null => {
+  const currentIndex = statuses.indexOf(status);
+
+  if (currentIndex < 0 || currentIndex >= statuses.length - 1) {
+    return null;
+  }
+
+  return statuses[currentIndex + 1];
+};
+
+const copyText = async (value: string) => {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  if (typeof document === "undefined") {
+    throw new Error("Clipboard indisponivel neste ambiente.");
+  }
+
+  const textArea = document.createElement("textarea");
+  textArea.value = value;
+  textArea.style.position = "fixed";
+  textArea.style.opacity = "0";
+  document.body.appendChild(textArea);
+  textArea.focus();
+  textArea.select();
+
+  try {
+    document.execCommand("copy");
+  } finally {
+    document.body.removeChild(textArea);
+  }
+};
+
+const buildShareErrorMessage = (error: unknown) => {
+  if (error instanceof ProductionShareError) {
+    switch (error.status) {
+      case 401:
+        return "Sessao expirada. Faca login novamente.";
+      case 403:
+        return "Acesso negado. Apenas admin e gerente podem compartilhar producao.";
+      case 404:
+        return "Producao nao encontrada para compartilhamento.";
+      case 500:
+        return "Erro interno ao gerar link de compartilhamento.";
+      default:
+        return error.message || "Nao foi possivel compartilhar esta producao.";
+    }
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return "Nao foi possivel compartilhar esta producao.";
+};
 
 interface TeamOption {
   id: string;
@@ -97,6 +165,7 @@ const ProductionPage = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingTeams, setIsLoadingTeams] = useState(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [sharingId, setSharingId] = useState<string | null>(null);
   const [requestError, setRequestError] = useState("");
   const [modeNotice, setModeNotice] = useState("");
   const [isMockMode, setIsMockMode] = useState(false);
@@ -112,6 +181,7 @@ const ProductionPage = () => {
   const [newMaterial, setNewMaterial] = useState({ productId: "", quantity: 1, unit: "unidade" });
   const [selectedToComplete, setSelectedToComplete] = useState<EmployeeProduction | null>(null);
   const [completionError, setCompletionError] = useState("");
+  const [completionErrorStatus, setCompletionErrorStatus] = useState<number | null>(null);
   const [completionDetails, setCompletionDetails] = useState<CompleteProductionStockDetail[]>([]);
   const completionInFlightRef = useRef<string | null>(null);
 
@@ -318,11 +388,12 @@ const ProductionPage = () => {
 
   const clearCompletionFeedback = () => {
     setCompletionError("");
+    setCompletionErrorStatus(null);
     setCompletionDetails([]);
   };
 
   const openCompleteModal = (order: EmployeeProduction) => {
-    if (updatingId) {
+    if (updatingId || isFinalizedStatus(order.productionStatus)) {
       return;
     }
 
@@ -421,6 +492,17 @@ const ProductionPage = () => {
     }
 
     const orderId = selectedToComplete.id;
+    const currentStatus = selectedToComplete.productionStatus;
+    const nextStatus = getNextStatus(currentStatus);
+
+    if (!nextStatus) {
+      toast({
+        title: "Fluxo finalizado",
+        description: "Esta producao ja esta na etapa Entregue.",
+      });
+      closeCompleteModal(true);
+      return;
+    }
 
     if (completionInFlightRef.current) {
       return;
@@ -435,13 +517,13 @@ const ProductionPage = () => {
     if (isMockMode) {
       setData((current) =>
         current.map((order) =>
-          order.id === orderId ? { ...order, productionStatus: "approved" } : order,
+          order.id === orderId ? { ...order, productionStatus: nextStatus } : order,
         ),
       );
       closeCompleteModal(true);
       toast({
-        title: "Produção aprovada",
-        description: "Produção aprovada com sucesso.",
+        title: "Etapa avancada",
+        description: `Status atualizado para ${statusLabels[nextStatus]}.`,
       });
       completionInFlightRef.current = null;
       setUpdatingId(null);
@@ -449,36 +531,39 @@ const ProductionPage = () => {
     }
 
     try {
-      await completeProduction(orderId);
+      const updated = await advanceProductionStatus(orderId);
 
       setData((current) =>
         current.map((order) =>
-          order.id === orderId ? { ...order, productionStatus: "approved" } : order,
+          order.id === orderId ? updated : order,
         ),
       );
 
       await loadProductions();
 
-      dispatchInventoryRefresh({
-        productionId: orderId,
-        source: "production-approve",
-        status: "approved",
-        materials: selectedToComplete.materials,
-      });
+      if (updated.productionStatus === "approved" && currentStatus !== "approved") {
+        dispatchInventoryRefresh({
+          productionId: orderId,
+          source: "production-advance-status",
+          status: "approved",
+          materials: updated.materials.length > 0 ? updated.materials : selectedToComplete.materials,
+        });
+      }
 
       closeCompleteModal(true);
       toast({
-        title: "Produção aprovada",
-        description: "Produção aprovada com sucesso e lista revalidada.",
+        title: "Etapa avancada",
+        description: `Status atualizado para ${statusLabels[updated.productionStatus]}.`,
       });
     } catch (error) {
       if (error instanceof CompleteProductionError) {
         setCompletionError(error.message);
+        setCompletionErrorStatus(error.status);
         setCompletionDetails(error.details);
 
         toast({
           variant: "destructive",
-          title: "Não foi possível aprovar a produção",
+          title: "Nao foi possivel avancar etapa",
           description:
             error.code === "insufficient_stock" && error.details.length > 0
               ? formatStockDetailMessage(error.details[0])
@@ -488,11 +573,12 @@ const ProductionPage = () => {
         return;
       }
 
-      const message = error instanceof Error ? error.message : "Falha ao concluir projeto.";
+      const message = error instanceof Error ? error.message : "Falha ao avancar etapa.";
       setCompletionError(message);
+      setCompletionErrorStatus(0);
       toast({
         variant: "destructive",
-        title: "Não foi possível aprovar a produção",
+        title: "Nao foi possivel avancar etapa",
         description: message,
       });
     } finally {
@@ -501,7 +587,60 @@ const ProductionPage = () => {
     }
   };
 
+  const shareProduction = async (order: EmployeeProduction) => {
+    if (sharingId || updatingId) {
+      return;
+    }
+
+    if (isMockMode) {
+      toast({
+        variant: "destructive",
+        title: "Compartilhamento indisponivel",
+        description: "No modo local/mock, o link publico nao pode ser gerado.",
+      });
+      return;
+    }
+
+    setSharingId(order.id);
+
+    try {
+      const payload = await createProductionShareLink(order.id);
+
+      if (!payload.url) {
+        throw new Error("A API nao retornou a URL de compartilhamento.");
+      }
+
+      await copyText(payload.url);
+
+      toast({
+        title: "Link copiado",
+        description: payload.expiresAt
+          ? `Link de acompanhamento copiado (expira em ${new Date(payload.expiresAt).toLocaleString("pt-BR")}).`
+          : "Link de acompanhamento copiado para a area de transferencia.",
+      });
+    } catch (error) {
+      if (error instanceof ProductionShareError && error.status === 401) {
+        if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+          window.location.assign("/login");
+        }
+
+        return;
+      }
+
+      toast({
+        variant: "destructive",
+        title: "Nao foi possivel compartilhar",
+        description: buildShareErrorMessage(error),
+      });
+    } finally {
+      setSharingId(null);
+    }
+  };
+
   const isCompletingSelected = Boolean(selectedToComplete && updatingId === selectedToComplete.id);
+  const selectedNextStatus = selectedToComplete
+    ? getNextStatus(selectedToComplete.productionStatus)
+    : null;
 
   const columns = [
     { key: "clientName", header: "Cliente" },
@@ -533,23 +672,42 @@ const ProductionPage = () => {
           {
             key: "actions",
             header: "",
-            render: (o: EmployeeProduction) =>
-              !isFinalizedStatus(o.productionStatus) ? (
-                <button
-                  disabled={Boolean(updatingId)}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    openCompleteModal(o);
-                  }}
-                  className="px-2 py-1 text-[11px] font-bold rounded bg-success/20 text-success hover:bg-success/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {updatingId === o.id ? "SALVANDO..." : "APROVAR/CONCLUIR"}
-                </button>
-              ) : (
-                <span className="text-[11px] text-success font-bold">
-                  {o.productionStatus === "approved" ? "✓ APROVADO" : "✓ ENTREGUE"}
-                </span>
-              ),
+            render: (o: EmployeeProduction) => {
+              const nextStatus = getNextStatus(o.productionStatus);
+              const isSharingCurrent = sharingId === o.id;
+              const isAdvancingCurrent = updatingId === o.id;
+
+              return (
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    disabled={Boolean(sharingId) || Boolean(updatingId)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void shareProduction(o);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-2 py-1 text-[11px] font-bold rounded border border-primary/30 text-primary hover:bg-primary/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Share2 className="h-3 w-3" />
+                    {isSharingCurrent ? "GERANDO LINK..." : "COMPARTILHAR PRODUCAO"}
+                  </button>
+
+                  {!isFinalizedStatus(o.productionStatus) && nextStatus ? (
+                    <button
+                      disabled={Boolean(updatingId) || Boolean(sharingId)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openCompleteModal(o);
+                      }}
+                      className="px-2 py-1 text-[11px] font-bold rounded bg-success/20 text-success hover:bg-success/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isAdvancingCurrent ? "AVANCANDO..." : `AVANCAR ETAPA (${statusLabels[nextStatus].toUpperCase()})`}
+                    </button>
+                  ) : (
+                    <span className="text-[11px] text-success font-bold">✓ ENTREGUE</span>
+                  )}
+                </div>
+              );
+            },
           },
         ]
       : []),
@@ -798,12 +956,12 @@ const ProductionPage = () => {
         <Modal
           open={Boolean(selectedToComplete)}
           onClose={() => closeCompleteModal()}
-          title="Aprovar/Concluir Produção"
+          title="Avancar Etapa da Producao"
           width="max-w-xl"
         >
           <div className="space-y-4">
             <p className="text-sm text-foreground/90">
-              Ao aprovar/concluir, o backend finaliza a producao e baixa automaticamente o estoque dos materiais utilizados.
+              O backend segue o fluxo oficial de etapas. Ao atingir Aprovado, o estoque e baixado automaticamente.
             </p>
 
             <div className="rounded border border-border bg-secondary/20 px-3 py-2 text-sm space-y-1">
@@ -812,6 +970,13 @@ const ProductionPage = () => {
               </p>
               <p>
                 <span className="text-muted-foreground">Projeto:</span> {selectedToComplete.description}
+              </p>
+              <p>
+                <span className="text-muted-foreground">Status atual:</span> {statusLabels[selectedToComplete.productionStatus]}
+              </p>
+              <p>
+                <span className="text-muted-foreground">Proxima etapa:</span>{" "}
+                {selectedNextStatus ? statusLabels[selectedNextStatus] : "Fluxo finalizado"}
               </p>
             </div>
 
@@ -825,6 +990,20 @@ const ProductionPage = () => {
                       <li key={`${detail.productId}-${index}`}>{formatStockDetailMessage(detail)}</li>
                     ))}
                   </ul>
+                )}
+
+                {(completionErrorStatus === 500 || completionErrorStatus === 0) && (
+                  <div className="pt-1">
+                    <button
+                      onClick={() => {
+                        void completeProject();
+                      }}
+                      disabled={isCompletingSelected}
+                      className="px-2 py-1 text-[11px] font-bold rounded border border-destructive/40 hover:bg-destructive/20 disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      TENTAR NOVAMENTE
+                    </button>
+                  </div>
                 )}
               </div>
             )}
@@ -841,10 +1020,14 @@ const ProductionPage = () => {
                 onClick={() => {
                   void completeProject();
                 }}
-                disabled={isCompletingSelected}
+                disabled={isCompletingSelected || !selectedNextStatus}
                 className="px-4 py-2 text-sm rounded bg-success text-success-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                {isCompletingSelected ? "Aprovando..." : "Aprovar/Concluir"}
+                {isCompletingSelected
+                  ? "Avancando..."
+                  : selectedNextStatus
+                    ? `Avancar para ${statusLabels[selectedNextStatus]}`
+                    : "Fluxo finalizado"}
               </button>
             </div>
           </div>

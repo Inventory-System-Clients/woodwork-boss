@@ -17,6 +17,7 @@ import StockPage from "./pages/Stock.tsx";
 import BudgetsPage from "./pages/Budgets.tsx";
 import ProductionPage from "./pages/Production.tsx";
 import LogisticsPage from "./pages/Logistics.tsx";
+import ProductionTrackingPublicPage from "./pages/ProductionTrackingPublic.tsx";
 
 const queryClient = new QueryClient();
 
@@ -29,6 +30,7 @@ const App = () => (
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/acompanhar-producao/:token" element={<ProductionTrackingPublicPage />} />
 
             <Route element={<RequireAuth />}>
               <Route path="/" element={<Index />} />
