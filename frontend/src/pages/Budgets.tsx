@@ -4,11 +4,15 @@ import { DataTable } from "@/components/DataTable";
 import { Modal } from "@/components/Modal";
 import { FormField } from "@/components/FormField";
 import { StatusBadge } from "@/components/StatusBadge";
-import { clients, products, calculateBudget } from "@/data/mockData";
+import { clients, calculateBudget } from "@/data/mockData";
 import { ApiError } from "@/services/api";
+import { dispatchInventoryDataChanged } from "@/lib/inventory-events";
 import {
+  ApproveBudgetError,
+  ApproveBudgetStockDetail,
   approveBudget,
   createBudget,
+  formatApproveBudgetDetailMessage,
   getBudgetById,
   listBudgets,
   updateBudget,
@@ -16,6 +20,7 @@ import {
   type BudgetMaterial as ApiBudgetMaterial,
   type BudgetStatus,
 } from "@/services/budgets";
+import { Product, listProducts } from "@/services/products";
 import { Plus, Trash2 } from "lucide-react";
 
 const imageDataUrlCache: Record<string, string | null | undefined> = {};
@@ -343,9 +348,20 @@ const BudgetsPage = () => {
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [isUpdatingDetail, setIsUpdatingDetail] = useState(false);
   const [detailError, setDetailError] = useState("");
+  const [productsCatalog, setProductsCatalog] = useState<Product[]>([]);
+  const [isLoadingProducts, setIsLoadingProducts] = useState(false);
+  const [productsError, setProductsError] = useState("");
+  const [selectedToApprove, setSelectedToApprove] = useState<BudgetRow | null>(null);
+  const [approvalError, setApprovalError] = useState("");
+  const [approvalDetails, setApprovalDetails] = useState<ApproveBudgetStockDetail[]>([]);
   const [detailForm, setDetailForm] = useState(createInitialDetailForm());
   const [form, setForm] = useState(createInitialBudgetForm);
-  const [newItem, setNewItem] = useState({ productId: "", quantity: 1 });
+  const [newItem, setNewItem] = useState({
+    productId: "",
+    quantity: 1,
+    unit: "unidade",
+    unitPrice: 0,
+  });
   const [contractForm, setContractForm] = useState<ContractFormState>({
     contratanteName: "",
     operationName: "",
@@ -377,24 +393,83 @@ const BudgetsPage = () => {
     void loadBudgetsFromApi();
   }, []);
 
+  const loadProductsForForm = async () => {
+    setIsLoadingProducts(true);
+    setProductsError("");
+
+    try {
+      const products = await listProducts();
+      setProductsCatalog(products);
+    } catch (error) {
+      setProductsCatalog([]);
+      setProductsError(normalizeBudgetError(error, "Nao foi possivel carregar produtos para o formulario."));
+    } finally {
+      setIsLoadingProducts(false);
+    }
+  };
+
+  const openCreateModal = () => {
+    setModal(true);
+    setFormError("");
+    void loadProductsForForm();
+  };
+
+  const clearApprovalFeedback = () => {
+    setApprovalError("");
+    setApprovalDetails([]);
+  };
+
+  const openApproveModal = (budget: BudgetRow) => {
+    if (approvingId) {
+      return;
+    }
+
+    clearApprovalFeedback();
+    setSelectedToApprove(budget);
+  };
+
+  const closeApproveModal = (force = false) => {
+    if (!force && approvingId) {
+      return;
+    }
+
+    setSelectedToApprove(null);
+    clearApprovalFeedback();
+  };
+
   const addItem = () => {
-    const product = products.find((p) => p.id === newItem.productId);
+    const product = productsCatalog.find((p) => p.id === newItem.productId);
+    const quantity = Number(newItem.quantity);
+    const unitPrice = Number(newItem.unitPrice);
+    const unit = newItem.unit.trim() || "unidade";
 
     if (!product) {
+      setFormError("Selecione um produto valido.");
+      return;
+    }
+
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setFormError("Informe uma quantidade valida para o material.");
+      return;
+    }
+
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+      setFormError("Informe um valor unitario valido para o material.");
       return;
     }
 
     const item: BudgetItemRow = {
       productId: product.id,
       productName: product.name,
-      quantity: newItem.quantity,
-      unit: product.unit,
-      unitPrice: product.price,
-      subtotal: product.price * newItem.quantity,
+      quantity,
+      unit,
+      unitPrice,
+      subtotal: unitPrice * quantity,
     };
 
     setForm((current) => ({ ...current, items: [...current.items, item] }));
-    setNewItem({ productId: "", quantity: 1 });
+    setFormError("");
+    setNewItem({ productId: "", quantity: 1, unit: "unidade", unitPrice: 0 });
   };
 
   const removeItem = (idx: number) => {
@@ -407,7 +482,8 @@ const BudgetsPage = () => {
     setModal(false);
     setFormError("");
     setForm(createInitialBudgetForm());
-    setNewItem({ productId: "", quantity: 1 });
+    setProductsError("");
+    setNewItem({ productId: "", quantity: 1, unit: "unidade", unitPrice: 0 });
   };
 
   const saveBudget = async () => {
@@ -428,6 +504,13 @@ const BudgetsPage = () => {
       return;
     }
 
+    const hasMaterialWithoutProduct = form.items.some((item) => !item.productId);
+
+    if (hasMaterialWithoutProduct) {
+      setFormError("Todos os materiais devem estar vinculados a um produto do banco.");
+      return;
+    }
+
     setIsSaving(true);
     setFormError("");
 
@@ -440,7 +523,7 @@ const BudgetsPage = () => {
         notes: form.notes.trim() ? form.notes.trim() : null,
         status: "draft",
         materials: form.items.map((item) => ({
-          productId: item.productId || undefined,
+          productId: item.productId,
           productName: item.productName,
           quantity: item.quantity,
           unit: item.unit,
@@ -524,21 +607,36 @@ const BudgetsPage = () => {
     }
   };
 
-  const convertToOrder = async (b: BudgetRow) => {
-    console.log("vai chamar PATCH approve", b.id);
-
-    if (approvingId) {
+  const confirmApproveBudget = async () => {
+    if (!selectedToApprove || approvingId) {
       return;
     }
 
-    setApprovingId(b.id);
+    const budgetId = selectedToApprove.id;
+
+    setApprovingId(budgetId);
     setRequestError("");
+    clearApprovalFeedback();
 
     try {
-      const approved = mapBudgetFromApi(await approveBudget(b.id));
+      const approved = mapBudgetFromApi(await approveBudget(budgetId));
       setData((current) => current.map((item) => (item.id === approved.id ? approved : item)));
+      closeApproveModal(true);
+
+      dispatchInventoryDataChanged({
+        source: "budget-approve",
+        referenceId: budgetId,
+      });
+
+      await loadBudgetsFromApi();
     } catch (error) {
-      setRequestError(normalizeBudgetError(error, "Não foi possível aprovar o orçamento."));
+      if (error instanceof ApproveBudgetError) {
+        setApprovalError(error.message);
+        setApprovalDetails(error.details);
+        return;
+      }
+
+      setApprovalError(normalizeBudgetError(error, "Não foi possível aprovar o orçamento."));
     } finally {
       setApprovingId(null);
     }
@@ -1055,10 +1153,9 @@ const BudgetsPage = () => {
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                console.log("clicou aprovar", b.id);
-                void convertToOrder(b);
+                openApproveModal(b);
               }}
-              disabled={approvingId === b.id}
+              disabled={Boolean(approvingId)}
               className="px-2 py-1 text-[11px] font-bold rounded bg-success/20 text-success hover:bg-success/30 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {approvingId === b.id ? "APROVANDO..." : "APROVAR"}
@@ -1073,7 +1170,7 @@ const BudgetsPage = () => {
     <DashboardLayout
       title="Orçamentos"
       action={
-        <button onClick={() => setModal(true)} className="bg-primary text-primary-foreground px-3 py-1.5 rounded text-xs font-bold hover:opacity-90 transition-opacity flex items-center gap-1.5">
+        <button onClick={openCreateModal} className="bg-primary text-primary-foreground px-3 py-1.5 rounded text-xs font-bold hover:opacity-90 transition-opacity flex items-center gap-1.5">
           <Plus className="h-3.5 w-3.5" /> NOVO ORÇAMENTO
         </button>
       }
@@ -1130,11 +1227,24 @@ const BudgetsPage = () => {
 
           <div>
             <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-3">Itens</p>
+
+            {productsError && (
+              <div className="mb-3 border border-destructive/40 bg-destructive/10 rounded px-3 py-2 text-sm text-destructive flex items-center justify-between gap-3">
+                <span>{productsError}</span>
+                <button
+                  onClick={() => void loadProductsForForm()}
+                  className="px-2 py-1 text-[11px] font-bold rounded border border-destructive/30 hover:bg-destructive/20"
+                >
+                  TENTAR NOVAMENTE
+                </button>
+              </div>
+            )}
+
             {form.items.length > 0 && (
               <div className="border border-border rounded mb-3 divide-y divide-border/50">
                 {form.items.map((item, i) => (
                   <div key={i} className="flex items-center justify-between px-3 py-2 text-sm">
-                    <span>{item.productName} × {item.quantity}</span>
+                    <span>{item.productName} × {item.quantity} {item.unit}</span>
                     <div className="flex items-center gap-3">
                       <span className="font-mono text-xs">R$ {item.subtotal.toFixed(2)}</span>
                       <button onClick={() => removeItem(i)} className="text-muted-foreground hover:text-destructive"><Trash2 className="h-3.5 w-3.5" /></button>
@@ -1143,15 +1253,54 @@ const BudgetsPage = () => {
                 ))}
               </div>
             )}
-            <div className="flex gap-3">
+
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
               <div className="flex-1">
-                <FormField label="Material" as="select" value={newItem.productId} onChange={e => setNewItem({ ...newItem, productId: e.target.value })} options={products.map(p => ({ value: p.id, label: `${p.name} - R$ ${p.price.toFixed(2)}` }))} />
+                <FormField
+                  label="Produto"
+                  as="select"
+                  value={newItem.productId}
+                  onChange={e => setNewItem({ ...newItem, productId: e.target.value })}
+                  options={productsCatalog.map((product) => ({
+                    value: product.id,
+                    label: `${product.name} (Saldo: ${product.stockQuantity})`,
+                  }))}
+                />
               </div>
               <div className="w-24">
-                <FormField label="Qtd." type="number" min={1} value={newItem.quantity} onChange={e => setNewItem({ ...newItem, quantity: Number(e.target.value) })} />
+                <FormField
+                  label="Qtd."
+                  type="number"
+                  min={1}
+                  value={newItem.quantity}
+                  onChange={e => setNewItem({ ...newItem, quantity: Number(e.target.value) })}
+                />
+              </div>
+              <div className="w-28">
+                <FormField
+                  label="Unid."
+                  value={newItem.unit}
+                  onChange={e => setNewItem({ ...newItem, unit: e.target.value })}
+                />
+              </div>
+              <div className="w-32">
+                <FormField
+                  label="Vlr Unit."
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={newItem.unitPrice}
+                  onChange={e => setNewItem({ ...newItem, unitPrice: Number(e.target.value) })}
+                />
               </div>
               <div className="flex items-end">
-                <button onClick={addItem} className="px-3 py-2 text-xs font-bold rounded border border-border hover:bg-secondary transition-colors text-foreground">ADICIONAR</button>
+                <button
+                  onClick={addItem}
+                  disabled={isLoadingProducts || productsCatalog.length === 0}
+                  className="px-3 py-2 text-xs font-bold rounded border border-border hover:bg-secondary transition-colors text-foreground disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {isLoadingProducts ? "CARREGANDO..." : "ADICIONAR"}
+                </button>
               </div>
             </div>
           </div>
@@ -1184,7 +1333,7 @@ const BudgetsPage = () => {
             <button onClick={closeCreateModal} className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground">Cancelar</button>
             <button
               onClick={() => void saveBudget()}
-              disabled={isSaving}
+              disabled={isSaving || isLoadingProducts}
               className="px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {isSaving ? "Salvando..." : "Criar Orçamento"}
@@ -1192,6 +1341,64 @@ const BudgetsPage = () => {
           </div>
         </div>
       </Modal>
+
+      {selectedToApprove && (
+        <Modal
+          open={Boolean(selectedToApprove)}
+          onClose={() => closeApproveModal()}
+          title="Aprovar Orcamento"
+          width="max-w-xl"
+        >
+          <div className="space-y-4">
+            <p className="text-sm text-foreground/90">
+              Ao aprovar, o backend vai baixar estoque dos produtos usados no orcamento e registrar movimentacoes de saida automaticamente.
+            </p>
+
+            <div className="rounded border border-border bg-secondary/20 px-3 py-2 text-sm space-y-1">
+              <p>
+                <span className="text-muted-foreground">Cliente:</span> {selectedToApprove.clientName}
+              </p>
+              <p>
+                <span className="text-muted-foreground">Descricao:</span> {selectedToApprove.description}
+              </p>
+              <p>
+                <span className="text-muted-foreground">Itens:</span> {selectedToApprove.items.length}
+              </p>
+            </div>
+
+            {approvalError && (
+              <div className="rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive space-y-2">
+                <p>{approvalError}</p>
+
+                {approvalDetails.length > 0 && (
+                  <ul className="list-disc pl-4 space-y-1 text-xs">
+                    {approvalDetails.map((detail, index) => (
+                      <li key={`${detail.productId}-${index}`}>{formatApproveBudgetDetailMessage(detail)}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={() => closeApproveModal()}
+                disabled={approvingId === selectedToApprove.id}
+                className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => void confirmApproveBudget()}
+                disabled={approvingId === selectedToApprove.id}
+                className="px-4 py-2 text-sm rounded bg-success text-success-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {approvingId === selectedToApprove.id ? "Aprovando..." : "Confirmar Aprovacao"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       <Modal
         open={detailModalOpen}

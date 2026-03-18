@@ -1,4 +1,4 @@
-import { parseCollection, request, toNullableString } from "@/services/api";
+import { ApiError, parseCollection, request, toNullableString } from "@/services/api";
 
 export type BudgetStatus = "draft" | "pending" | "approved" | "rejected";
 
@@ -36,6 +36,39 @@ export interface CreateBudgetInput {
 
 export type UpdateBudgetInput = Partial<CreateBudgetInput>;
 
+export interface ApproveBudgetStockDetail {
+  productId: string;
+  productName: string;
+  requestedQuantity: number;
+  availableStock: number;
+}
+
+export type ApproveBudgetErrorCode =
+  | "insufficient_stock"
+  | "invalid_material_data"
+  | "stock_schema_missing"
+  | "unknown";
+
+interface ApproveBudgetErrorInput {
+  status: number;
+  code: ApproveBudgetErrorCode;
+  message: string;
+  details?: ApproveBudgetStockDetail[];
+}
+
+export class ApproveBudgetError extends Error {
+  status: number;
+  code: ApproveBudgetErrorCode;
+  details: ApproveBudgetStockDetail[];
+
+  constructor({ status, code, message, details = [] }: ApproveBudgetErrorInput) {
+    super(message);
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
 const toRecord = (value: unknown): Record<string, unknown> | null => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -59,6 +92,96 @@ const toNullableIsoString = (value: unknown) => {
 const toNumberSafe = (value: unknown, fallback = 0) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const mapApproveBudgetDetail = (value: unknown): ApproveBudgetStockDetail | null => {
+  const item = toRecord(value);
+
+  if (!item) {
+    return null;
+  }
+
+  const productId = toStringSafe(item.productId ?? item.product_id, "");
+  const productName = toStringSafe(item.productName ?? item.product_name, "");
+  const requestedQuantity = toNumberSafe(item.requestedQuantity ?? item.requested_quantity, 0);
+  const availableStock = toNumberSafe(item.availableStock ?? item.available_stock, 0);
+
+  if (!productId && !productName && requestedQuantity === 0 && availableStock === 0) {
+    return null;
+  }
+
+  return {
+    productId,
+    productName,
+    requestedQuantity,
+    availableStock,
+  };
+};
+
+const extractApproveBudgetDetails = (payload: unknown) => {
+  const record = toRecord(payload);
+
+  if (!record) {
+    return [] as ApproveBudgetStockDetail[];
+  }
+
+  const source = record.details ?? record.detail;
+
+  if (Array.isArray(source)) {
+    return source
+      .map(mapApproveBudgetDetail)
+      .filter((item): item is ApproveBudgetStockDetail => Boolean(item));
+  }
+
+  const single = mapApproveBudgetDetail(source);
+
+  if (single) {
+    return [single];
+  }
+
+  const fallback = mapApproveBudgetDetail(record);
+  return fallback ? [fallback] : [];
+};
+
+const mapApproveBudgetError = (error: ApiError) => {
+  const details = extractApproveBudgetDetails(error.payload);
+
+  switch (error.status) {
+    case 409:
+      return new ApproveBudgetError({
+        status: 409,
+        code: "insufficient_stock",
+        message: "Estoque insuficiente para aprovar este orcamento.",
+        details,
+      });
+    case 400:
+      return new ApproveBudgetError({
+        status: 400,
+        code: "invalid_material_data",
+        message: "Dados inconsistentes no orcamento. Revise materiais e produtos vinculados.",
+        details,
+      });
+    case 500:
+      return new ApproveBudgetError({
+        status: 500,
+        code: "stock_schema_missing",
+        message: "Configuracao de estoque indisponivel no servidor. Contate o suporte.",
+      });
+    default:
+      return new ApproveBudgetError({
+        status: error.status,
+        code: "unknown",
+        message: error.message || "Nao foi possivel aprovar o orcamento.",
+        details,
+      });
+  }
+};
+
+export const formatApproveBudgetDetailMessage = (detail: ApproveBudgetStockDetail) => {
+  const productName = detail.productName || "Produto";
+  const productId = detail.productId || "sem-id";
+
+  return `Produto ${productName} (id: ${productId}): solicitado ${detail.requestedQuantity}, disponivel ${detail.availableStock}.`;
 };
 
 const normalizeStatus = (value: unknown): BudgetStatus => {
@@ -239,9 +362,17 @@ export const updateBudget = async (id: string, input: UpdateBudgetInput) => {
 };
 
 export const approveBudget = async (id: string) => {
-  const payload = await request<unknown>(`/budgets/${id}/approve`, {
-    method: "PATCH",
-  });
+  try {
+    const payload = await request<unknown>(`/budgets/${id}/approve`, {
+      method: "PATCH",
+    });
 
-  return ensureBudget(payload, "Não foi possível aprovar o orçamento.");
+    return ensureBudget(payload, "Não foi possível aprovar o orçamento.");
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw mapApproveBudgetError(error);
+    }
+
+    throw error;
+  }
 };

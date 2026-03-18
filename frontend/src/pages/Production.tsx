@@ -7,7 +7,8 @@ import { FormField } from "@/components/FormField";
 import { toast } from "@/components/ui/use-toast";
 import { dispatchInventoryRefresh } from "@/lib/inventory-events";
 import { useAuth, useRoleAccess } from "@/auth/AuthProvider";
-import { clients, products, orders as mockOrders, ProductionMaterial } from "@/data/mockData";
+import { clients, orders as mockOrders, ProductionMaterial } from "@/data/mockData";
+import { Product, listProducts } from "@/services/products";
 import { listTeams } from "@/services/teams";
 import {
   CompleteProductionError,
@@ -72,9 +73,12 @@ const ProductionPage = () => {
   const [modeNotice, setModeNotice] = useState("");
   const [isMockMode, setIsMockMode] = useState(false);
   const [teams, setTeams] = useState<TeamOption[]>([]);
+  const [productsCatalog, setProductsCatalog] = useState<Product[]>([]);
+  const [isLoadingProducts, setIsLoadingProducts] = useState(false);
+  const [productsError, setProductsError] = useState("");
   const [formError, setFormError] = useState("");
   const [form, setForm] = useState(createInitialForm);
-  const [newMaterial, setNewMaterial] = useState({ productId: "", quantity: 1 });
+  const [newMaterial, setNewMaterial] = useState({ productId: "", quantity: 1, unit: "unidade" });
   const [selectedToComplete, setSelectedToComplete] = useState<EmployeeProduction | null>(null);
   const [completionError, setCompletionError] = useState("");
   const [completionDetails, setCompletionDetails] = useState<CompleteProductionStockDetail[]>([]);
@@ -149,16 +153,54 @@ const ProductionPage = () => {
     }
   };
 
+  const loadProductsForForm = async () => {
+    if (!canCreateProduction) {
+      setProductsCatalog([]);
+      setProductsError("");
+      setIsLoadingProducts(false);
+      return;
+    }
+
+    setIsLoadingProducts(true);
+    setProductsError("");
+
+    try {
+      const products = await listProducts();
+      setProductsCatalog(products);
+    } catch (error) {
+      setProductsCatalog([]);
+      const message = error instanceof Error ? error.message : "Falha ao carregar produtos.";
+      setProductsError(`Nao foi possivel carregar produtos: ${message}`);
+    } finally {
+      setIsLoadingProducts(false);
+    }
+  };
+
   useEffect(() => {
     void loadProductions();
     void loadTeams();
   }, [canCreateProduction, isEmployee, user?.id]);
 
-  const addMaterial = () => {
-    const product = products.find((p) => p.id === newMaterial.productId);
-    const quantity = Number(newMaterial.quantity);
+  useEffect(() => {
+    if (!modal) {
+      return;
+    }
 
-    if (!product || !Number.isFinite(quantity) || quantity <= 0) {
+    void loadProductsForForm();
+  }, [modal, canCreateProduction]);
+
+  const addMaterial = () => {
+    const product = productsCatalog.find((p) => p.id === newMaterial.productId);
+    const quantity = Number(newMaterial.quantity);
+    const unit = newMaterial.unit.trim() || "unidade";
+
+    if (!product) {
+      setFormError("Selecione um produto valido.");
+      return;
+    }
+
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setFormError("Informe uma quantidade valida para o material.");
       return;
     }
 
@@ -182,13 +224,14 @@ const ProductionPage = () => {
             productId: product.id,
             productName: product.name,
             quantity,
-            unit: product.unit,
+            unit,
           },
         ],
       };
     });
 
-    setNewMaterial({ productId: "", quantity: 1 });
+    setFormError("");
+    setNewMaterial({ productId: "", quantity: 1, unit });
   };
 
   const removeMaterial = (idx: number) => {
@@ -201,8 +244,15 @@ const ProductionPage = () => {
   const closeModal = () => {
     setModal(false);
     setFormError("");
+    setProductsError("");
     setForm(createInitialForm());
-    setNewMaterial({ productId: "", quantity: 1 });
+    setNewMaterial({ productId: "", quantity: 1, unit: "unidade" });
+  };
+
+  const openCreateModal = () => {
+    setModal(true);
+    setFormError("");
+    void loadProductsForForm();
   };
 
   const clearCompletionFeedback = () => {
@@ -243,6 +293,15 @@ const ProductionPage = () => {
       form.materials.length === 0
     ) {
       setFormError("Preencha cliente, descrição, prazo, equipe, custo inicial e pelo menos um material.");
+      return;
+    }
+
+    const hasInvalidMaterial = form.materials.some(
+      (material) => !material.productId || !material.productName,
+    );
+
+    if (hasInvalidMaterial) {
+      setFormError("Todos os materiais devem estar vinculados a um produto do banco.");
       return;
     }
 
@@ -413,7 +472,6 @@ const ProductionPage = () => {
                   disabled={Boolean(updatingId)}
                   onClick={(e) => {
                     e.stopPropagation();
-                    console.log("clicou aprovar", o.id);
                     openCompleteModal(o);
                   }}
                   className="px-2 py-1 text-[11px] font-bold rounded bg-success/20 text-success hover:bg-success/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -436,7 +494,7 @@ const ProductionPage = () => {
       subtitle={isEmployee ? "Minhas produções por funcionário" : "Acompanhamento de Pedidos"}
       action={canCreateProduction ? (
         <button
-          onClick={() => setModal(true)}
+          onClick={openCreateModal}
           className="bg-primary text-primary-foreground px-3 py-1.5 rounded text-xs font-bold hover:opacity-90 transition-opacity flex items-center gap-1.5"
         >
           <Plus className="h-3.5 w-3.5" /> NOVA PRODUÇÃO
@@ -534,6 +592,18 @@ const ProductionPage = () => {
                 Materiais que serão usados
               </p>
 
+              {productsError && (
+                <div className="mb-3 border border-destructive/40 bg-destructive/10 rounded px-3 py-2 text-sm text-destructive flex items-center justify-between gap-3">
+                  <span>{productsError}</span>
+                  <button
+                    onClick={() => void loadProductsForForm()}
+                    className="px-2 py-1 text-[11px] font-bold rounded border border-destructive/30 hover:bg-destructive/20"
+                  >
+                    TENTAR NOVAMENTE
+                  </button>
+                </div>
+              )}
+
               {form.materials.length > 0 && (
                 <div className="border border-border rounded mb-3 divide-y divide-border/50">
                   {form.materials.map((item, idx) => (
@@ -552,16 +622,16 @@ const ProductionPage = () => {
                 </div>
               )}
 
-              <div className="flex gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <div className="flex-1">
                   <FormField
-                    label="Material"
+                    label="Produto"
                     as="select"
                     value={newMaterial.productId}
                     onChange={(e) => setNewMaterial((current) => ({ ...current, productId: e.target.value }))}
-                    options={products.map((p) => ({
-                      value: p.id,
-                      label: `${p.name} (${p.unit})`,
+                    options={productsCatalog.map((product) => ({
+                      value: product.id,
+                      label: `${product.name} (Saldo: ${product.stockQuantity})`,
                     }))}
                   />
                 </div>
@@ -575,12 +645,20 @@ const ProductionPage = () => {
                     onChange={(e) => setNewMaterial((current) => ({ ...current, quantity: Number(e.target.value) }))}
                   />
                 </div>
+                <div className="w-28">
+                  <FormField
+                    label="Unidade"
+                    value={newMaterial.unit}
+                    onChange={(e) => setNewMaterial((current) => ({ ...current, unit: e.target.value }))}
+                  />
+                </div>
                 <div className="flex items-end">
                   <button
                     onClick={addMaterial}
-                    className="px-3 py-2 text-xs font-bold rounded border border-border hover:bg-secondary transition-colors text-foreground"
+                    disabled={isLoadingProducts || productsCatalog.length === 0}
+                    className="px-3 py-2 text-xs font-bold rounded border border-border hover:bg-secondary transition-colors text-foreground disabled:opacity-60 disabled:cursor-not-allowed"
                   >
-                    ADICIONAR
+                    {isLoadingProducts ? "CARREGANDO..." : "ADICIONAR"}
                   </button>
                 </div>
               </div>
@@ -608,7 +686,7 @@ const ProductionPage = () => {
               </button>
               <button
                 onClick={() => void saveProduction()}
-                disabled={isSaving || isLoadingTeams || teams.length === 0}
+                disabled={isSaving || isLoadingTeams || isLoadingProducts || teams.length === 0 || productsCatalog.length === 0}
                 className="px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {isSaving ? "Salvando..." : "Criar Produção"}
@@ -663,9 +741,6 @@ const ProductionPage = () => {
               </button>
               <button
                 onClick={() => {
-                  if (selectedToComplete?.id) {
-                    console.log("clicou aprovar", selectedToComplete.id);
-                  }
                   void completeProject();
                 }}
                 disabled={isCompletingSelected}

@@ -1,12 +1,30 @@
-import type { ProductionMaterial } from "@/data/mockData";
-
 export const INVENTORY_REFRESH_EVENT = "inventory:refresh-needed";
+export const INVENTORY_DATA_CHANGED_EVENT = "inventory:data-changed";
+
+export interface InventoryMaterial {
+  productId: string;
+  productName: string;
+  quantity: number;
+  unit: string;
+}
+
+export type InventoryChangeSource =
+  | "production-approve"
+  | "production-complete"
+  | "budget-approve"
+  | "stock-movement-create";
 
 export interface InventoryRefreshEventDetail {
   productionId: string;
   source: "production-approve" | "production-complete";
   status: "approved" | "delivered";
-  materials: ProductionMaterial[];
+  materials: InventoryMaterial[];
+  happenedAt: string;
+}
+
+export interface InventoryDataChangedEventDetail {
+  source: InventoryChangeSource;
+  referenceId: string;
   happenedAt: string;
 }
 
@@ -14,8 +32,32 @@ interface DispatchInventoryRefreshInput {
   productionId: string;
   source: "production-approve" | "production-complete";
   status: "approved" | "delivered";
-  materials: ProductionMaterial[];
+  materials: InventoryMaterial[];
 }
+
+interface DispatchInventoryDataChangedInput {
+  source: InventoryChangeSource;
+  referenceId: string;
+}
+
+export const dispatchInventoryDataChanged = ({
+  source,
+  referenceId,
+}: DispatchInventoryDataChangedInput) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.dispatchEvent(
+    new CustomEvent<InventoryDataChangedEventDetail>(INVENTORY_DATA_CHANGED_EVENT, {
+      detail: {
+        source,
+        referenceId,
+        happenedAt: new Date().toISOString(),
+      },
+    }),
+  );
+};
 
 export const dispatchInventoryRefresh = ({
   productionId,
@@ -38,4 +80,6 @@ export const dispatchInventoryRefresh = ({
       },
     }),
   );
+
+  dispatchInventoryDataChanged({ source, referenceId: productionId });
 };

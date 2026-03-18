@@ -11,6 +11,8 @@ const statusStyles: Record<string, string> = {
   delivered: "bg-success/20 text-success",
   entry: "bg-success/20 text-success",
   exit: "bg-destructive/20 text-destructive",
+  entrada: "bg-success/20 text-success",
+  saida: "bg-destructive/20 text-destructive",
 };
 
 const statusLabels: Record<string, string> = {
@@ -26,6 +28,8 @@ const statusLabels: Record<string, string> = {
   delivered: "Entregue",
   entry: "Entrada",
   exit: "Saída",
+  entrada: "Entrada",
+  saida: "Saída",
 };
 
 export function StatusBadge({ status }: { status: string }) {
