@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { ChangeEvent, useEffect, useRef, useState } from "react";
 import { DashboardLayout } from "@/layouts/DashboardLayout";
 import { DataTable } from "@/components/DataTable";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -16,14 +16,18 @@ import {
   CompleteProductionError,
   CompleteProductionStockDetail,
   EmployeeProduction,
+  ProductionImage,
+  ProductionImageError,
   ProductionShareError,
   ProductionStatus,
   createProductionShareLink,
   createProduction,
   formatStockDetailMessage,
+  listProductionImages,
   listProductions,
+  uploadProductionImages,
 } from "@/services/productions";
-import { Plus, Share2, Trash2 } from "lucide-react";
+import { ImagePlus, Plus, Share2, Trash2 } from "lucide-react";
 
 const statuses: ProductionStatus[] = ["pending", "cutting", "assembly", "finishing", "quality_check", "approved", "delivered"];
 const statusLabels: Record<ProductionStatus, string> = {
@@ -38,6 +42,8 @@ const statusLabels: Record<ProductionStatus, string> = {
 const apiBaseUrl = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 const isDevelopment = import.meta.env.DEV;
 const isApiConfigured = Boolean(apiBaseUrl);
+const MAX_IMAGES_PER_REQUEST = 10;
+const MAX_IMAGE_SIZE_MB = 8;
 
 const isFinalizedStatus = (status: ProductionStatus) => status === "delivered";
 
@@ -97,6 +103,63 @@ const buildShareErrorMessage = (error: unknown) => {
   }
 
   return "Nao foi possivel compartilhar esta producao.";
+};
+
+const formatImageDateTime = (value: string) => {
+  if (!value) {
+    return "Data nao informada";
+  }
+
+  const parsed = new Date(value);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return parsed.toLocaleString("pt-BR");
+};
+
+const formatImageSize = (bytes: number) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+
+  const kb = bytes / 1024;
+
+  if (kb < 1024) {
+    return `${kb.toFixed(1)} KB`;
+  }
+
+  return `${(kb / 1024).toFixed(1)} MB`;
+};
+
+const buildImageErrorMessage = (error: unknown) => {
+  if (error instanceof ProductionImageError) {
+    switch (error.status) {
+      case 400:
+        return "Nao foi possivel enviar imagens. Verifique tipo, tamanho (maximo 8MB) e limite de 10 arquivos.";
+      case 401:
+        return "Sessao expirada. Faca login novamente.";
+      case 403:
+        return "Acesso negado. Apenas admin e gerente podem gerenciar imagens.";
+      case 404:
+        return "Producao nao encontrada para gerenciar imagens.";
+      case 413:
+        return "Arquivo muito grande. O limite por imagem e 8MB.";
+      case 415:
+        return "Formato invalido. Envie somente arquivos de imagem.";
+      case 500:
+        return "Erro interno ao processar imagens da producao.";
+      default:
+        return error.message || "Nao foi possivel processar imagens desta producao.";
+    }
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return "Nao foi possivel processar imagens desta producao.";
 };
 
 interface TeamOption {
@@ -183,7 +246,14 @@ const ProductionPage = () => {
   const [completionError, setCompletionError] = useState("");
   const [completionErrorStatus, setCompletionErrorStatus] = useState<number | null>(null);
   const [completionDetails, setCompletionDetails] = useState<CompleteProductionStockDetail[]>([]);
+  const [selectedForImages, setSelectedForImages] = useState<EmployeeProduction | null>(null);
+  const [productionImages, setProductionImages] = useState<ProductionImage[]>([]);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [isLoadingImages, setIsLoadingImages] = useState(false);
+  const [isUploadingImages, setIsUploadingImages] = useState(false);
+  const [imagesError, setImagesError] = useState("");
   const completionInFlightRef = useRef<string | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
 
   const formatCurrency = (value: number) =>
     value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -408,6 +478,123 @@ const ProductionPage = () => {
 
     setSelectedToComplete(null);
     clearCompletionFeedback();
+  };
+
+  const clearSelectedFiles = () => {
+    setSelectedFiles([]);
+
+    if (imageInputRef.current) {
+      imageInputRef.current.value = "";
+    }
+  };
+
+  const closeImagesModal = () => {
+    if (isUploadingImages) {
+      return;
+    }
+
+    setSelectedForImages(null);
+    setProductionImages([]);
+    setImagesError("");
+    setIsLoadingImages(false);
+    clearSelectedFiles();
+  };
+
+  const loadImagesForProduction = async (productionId: string) => {
+    setIsLoadingImages(true);
+    setImagesError("");
+
+    try {
+      const images = await listProductionImages(productionId);
+      setProductionImages(images);
+    } catch (error) {
+      if (error instanceof ProductionImageError && error.status === 401) {
+        if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+          window.location.assign("/login");
+        }
+
+        return;
+      }
+
+      setProductionImages([]);
+      setImagesError(buildImageErrorMessage(error));
+    } finally {
+      setIsLoadingImages(false);
+    }
+  };
+
+  const openImagesModal = (order: EmployeeProduction) => {
+    if (Boolean(sharingId) || Boolean(updatingId)) {
+      return;
+    }
+
+    setSelectedForImages(order);
+    setProductionImages([]);
+    setImagesError("");
+    clearSelectedFiles();
+
+    if (isMockMode) {
+      setImagesError("No modo local/mock, o upload de imagens nao esta disponivel.");
+      return;
+    }
+
+    void loadImagesForProduction(order.id);
+  };
+
+  const handleSelectFiles = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    setImagesError("");
+    setSelectedFiles(files);
+  };
+
+  const submitImages = async () => {
+    if (!selectedForImages || isUploadingImages) {
+      return;
+    }
+
+    if (isMockMode) {
+      setImagesError("No modo local/mock, o upload de imagens nao esta disponivel.");
+      return;
+    }
+
+    if (!selectedFiles.length) {
+      setImagesError("Selecione ao menos uma imagem para enviar.");
+      return;
+    }
+
+    setIsUploadingImages(true);
+    setImagesError("");
+
+    try {
+      await uploadProductionImages(selectedForImages.id, selectedFiles);
+      const refreshedImages = await listProductionImages(selectedForImages.id);
+      setProductionImages(refreshedImages);
+      clearSelectedFiles();
+
+      toast({
+        title: "Imagens enviadas",
+        description: `${selectedFiles.length} arquivo(s) enviado(s) com sucesso.`,
+      });
+    } catch (error) {
+      if (error instanceof ProductionImageError && error.status === 401) {
+        if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+          window.location.assign("/login");
+        }
+
+        return;
+      }
+
+      const message = buildImageErrorMessage(error);
+      setImagesError(message);
+
+      toast({
+        variant: "destructive",
+        title: "Nao foi possivel enviar imagens",
+        description: message,
+      });
+    } finally {
+      setIsUploadingImages(false);
+    }
   };
 
   const saveProduction = async () => {
@@ -638,6 +825,7 @@ const ProductionPage = () => {
   };
 
   const isCompletingSelected = Boolean(selectedToComplete && updatingId === selectedToComplete.id);
+  const isManagingSelectedImages = Boolean(selectedForImages && (isLoadingImages || isUploadingImages));
   const selectedNextStatus = selectedToComplete
     ? getNextStatus(selectedToComplete.productionStatus)
     : null;
@@ -676,9 +864,23 @@ const ProductionPage = () => {
               const nextStatus = getNextStatus(o.productionStatus);
               const isSharingCurrent = sharingId === o.id;
               const isAdvancingCurrent = updatingId === o.id;
+              const isManagingImagesCurrent =
+                selectedForImages?.id === o.id && (isLoadingImages || isUploadingImages);
 
               return (
                 <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    disabled={Boolean(sharingId) || Boolean(updatingId) || isLoadingImages || isUploadingImages}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openImagesModal(o);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-2 py-1 text-[11px] font-bold rounded border border-border text-foreground hover:bg-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <ImagePlus className="h-3 w-3" />
+                    {isManagingImagesCurrent ? "IMAGENS..." : "IMAGENS"}
+                  </button>
+
                   <button
                     disabled={Boolean(sharingId) || Boolean(updatingId)}
                     onClick={(e) => {
@@ -946,6 +1148,132 @@ const ProductionPage = () => {
                 className="w-full sm:w-auto px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {isSaving ? "Salvando..." : "Criar Produção"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {canCompleteProduction && selectedForImages && (
+        <Modal
+          open={Boolean(selectedForImages)}
+          onClose={closeImagesModal}
+          title="Gerenciar Imagens da Producao"
+          width="max-w-4xl"
+        >
+          <div className="space-y-4">
+            <div className="rounded border border-border bg-secondary/20 px-3 py-2 text-sm space-y-1">
+              <p>
+                <span className="text-muted-foreground">Cliente:</span> {selectedForImages.clientName}
+              </p>
+              <p>
+                <span className="text-muted-foreground">Projeto:</span> {selectedForImages.description}
+              </p>
+              <p>
+                <span className="text-muted-foreground">Status:</span> {statusLabels[selectedForImages.productionStatus]}
+              </p>
+            </div>
+
+            <div className="rounded border border-border p-4 space-y-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Upload de imagens</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Selecione ate {MAX_IMAGES_PER_REQUEST} arquivos por envio. Limite de {MAX_IMAGE_SIZE_MB}MB por imagem.
+                </p>
+              </div>
+
+              <input
+                ref={imageInputRef}
+                type="file"
+                multiple
+                accept="image/*"
+                onChange={handleSelectFiles}
+                disabled={isUploadingImages}
+                className="block w-full text-sm text-foreground file:mr-3 file:rounded file:border file:border-border file:bg-secondary file:px-3 file:py-1.5 file:text-xs file:font-bold hover:file:bg-secondary/80 disabled:opacity-60 disabled:cursor-not-allowed"
+              />
+
+              {selectedFiles.length > 0 && (
+                <ul className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {selectedFiles.map((file) => (
+                    <li key={`${file.name}-${file.size}-${file.lastModified}`} className="rounded border border-border bg-card px-3 py-2 text-xs">
+                      <p className="font-medium text-foreground truncate">{file.name}</p>
+                      <p className="text-muted-foreground mt-1">{formatImageSize(file.size)}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => {
+                    void submitImages();
+                  }}
+                  disabled={isUploadingImages || !selectedFiles.length}
+                  className="px-3 py-1.5 text-xs font-bold rounded bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {isUploadingImages ? "ENVIANDO..." : "ENVIAR IMAGENS"}
+                </button>
+
+                <button
+                  onClick={() => {
+                    void loadImagesForProduction(selectedForImages.id);
+                  }}
+                  disabled={isManagingSelectedImages}
+                  className="px-3 py-1.5 text-xs font-bold rounded border border-border hover:bg-secondary transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {isLoadingImages ? "ATUALIZANDO..." : "ATUALIZAR LISTA"}
+                </button>
+              </div>
+
+              {isUploadingImages && (
+                <p className="text-xs text-muted-foreground animate-pulse">
+                  Enviando {selectedFiles.length} arquivo(s)...
+                </p>
+              )}
+            </div>
+
+            {imagesError && (
+              <div className="rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {imagesError}
+              </div>
+            )}
+
+            <div className="rounded border border-border p-4">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Galeria interna</p>
+                <span className="text-xs text-muted-foreground">{productionImages.length} arquivo(s)</span>
+              </div>
+
+              {isLoadingImages ? (
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {Array.from({ length: 4 }).map((_, index) => (
+                    <div key={index} className="h-16 rounded border border-border bg-secondary/40 animate-pulse" />
+                  ))}
+                </div>
+              ) : productionImages.length === 0 ? (
+                <p className="mt-3 text-sm text-muted-foreground">Nenhuma imagem cadastrada para esta producao.</p>
+              ) : (
+                <ul className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {productionImages.map((image) => (
+                    <li key={image.id} className="rounded border border-border bg-card px-3 py-2">
+                      <p className="text-sm font-medium text-foreground truncate">{image.fileName}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">Enviado em {formatImageDateTime(image.createdAt)}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {image.mimeType || "image/*"} - {formatImageSize(image.fileSize)}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                onClick={closeImagesModal}
+                disabled={isUploadingImages}
+                className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                Fechar
               </button>
             </div>
           </div>

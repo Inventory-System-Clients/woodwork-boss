@@ -1,13 +1,34 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
+import { Modal } from "@/components/Modal";
 import { StatusBadge } from "@/components/StatusBadge";
 import {
   ProductionShareError,
+  SharedProductionImage,
   SharedProductionSnapshot,
-  getSharedProductionSnapshot,
+  getPublicProductionByToken,
 } from "@/services/productions";
 
 const POLLING_INTERVAL_MS = 30000;
+const rawApiUrl = (import.meta.env.VITE_API_URL || "").trim().replace(/\/$/, "");
+const apiBaseUrl = rawApiUrl
+  ? (rawApiUrl.endsWith("/api") ? rawApiUrl : `${rawApiUrl}/api`)
+  : "/api";
+
+interface PublicImageCardData {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  createdAt: string;
+  candidateUrls: string[];
+}
+
+interface SelectedImage {
+  src: string;
+  fileName: string;
+  createdAt: string;
+}
 
 const getSnapshotUpdatedAt = (snapshot: SharedProductionSnapshot) => {
   const parsed = new Date(snapshot.updatedAt);
@@ -47,6 +68,72 @@ const formatDate = (value: string) => {
   return parsed.toLocaleDateString("pt-BR");
 };
 
+const formatImageSize = (bytes: number) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+
+  const kb = bytes / 1024;
+
+  if (kb < 1024) {
+    return `${kb.toFixed(1)} KB`;
+  }
+
+  return `${(kb / 1024).toFixed(1)} MB`;
+};
+
+const resolveImageUrl = (value: string) => {
+  const normalized = value.trim();
+
+  if (!normalized) {
+    return "";
+  }
+
+  if (/^https?:\/\//i.test(normalized)) {
+    return normalized;
+  }
+
+  if (normalized.startsWith("/")) {
+    if (!rawApiUrl) {
+      return normalized;
+    }
+
+    if (rawApiUrl.endsWith("/api") && normalized.startsWith("/api/")) {
+      return `${rawApiUrl}${normalized.slice(4)}`;
+    }
+
+    return `${rawApiUrl}${normalized}`;
+  }
+
+  if (!rawApiUrl) {
+    return normalized;
+  }
+
+  return `${rawApiUrl}/${normalized.replace(/^\/+/, "")}`;
+};
+
+const buildImageAliasUrls = (token: string, imageId: string) => {
+  const encodedToken = encodeURIComponent(token.trim());
+  const encodedImageId = encodeURIComponent(imageId.trim());
+
+  if (!encodedToken || !encodedImageId) {
+    return [];
+  }
+
+  return [
+    `${apiBaseUrl}/public/productions/${encodedToken}/images/${encodedImageId}`,
+    `${apiBaseUrl}/productions/public/${encodedToken}/images/${encodedImageId}`,
+    `${apiBaseUrl}/productions/shared/${encodedToken}/images/${encodedImageId}`,
+  ];
+};
+
+const buildImageCandidateUrls = (token: string, image: SharedProductionImage) => {
+  const fromPayload = resolveImageUrl(image.url || "");
+  const fromAliases = buildImageAliasUrls(token, image.id);
+
+  return Array.from(new Set([fromPayload, ...fromAliases].filter(Boolean)));
+};
+
 const getPublicTrackingErrorMessage = (error: unknown) => {
   if (error instanceof ProductionShareError) {
     switch (error.status) {
@@ -66,6 +153,89 @@ const getPublicTrackingErrorMessage = (error: unknown) => {
   return "Nao foi possivel carregar o acompanhamento da producao.";
 };
 
+interface PublicImageCardProps {
+  image: PublicImageCardData;
+  onOpen: (image: SelectedImage) => void;
+}
+
+const PublicImageCard = ({ image, onOpen }: PublicImageCardProps) => {
+  const [candidateIndex, setCandidateIndex] = useState(0);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [isFailed, setIsFailed] = useState(false);
+
+  useEffect(() => {
+    setCandidateIndex(0);
+    setIsLoaded(false);
+    setIsFailed(false);
+  }, [image.id, image.candidateUrls.join("|")]);
+
+  const activeSrc = isFailed ? "" : image.candidateUrls[candidateIndex] || "";
+
+  const handleError = () => {
+    if (candidateIndex < image.candidateUrls.length - 1) {
+      setCandidateIndex((current) => current + 1);
+      setIsLoaded(false);
+      return;
+    }
+
+    setIsFailed(true);
+  };
+
+  return (
+    <article className="rounded-lg border border-border bg-card overflow-hidden">
+      <button
+        type="button"
+        className="block w-full text-left"
+        disabled={!activeSrc || isFailed}
+        onClick={() => {
+          if (!activeSrc || isFailed) {
+            return;
+          }
+
+          onOpen({
+            src: activeSrc,
+            fileName: image.fileName,
+            createdAt: image.createdAt,
+          });
+        }}
+      >
+        <div className="relative aspect-[4/3] bg-secondary/30 border-b border-border overflow-hidden">
+          {!isLoaded && !isFailed && (
+            <div className="absolute inset-0 animate-pulse flex items-center justify-center text-xs text-muted-foreground">
+              Carregando imagem...
+            </div>
+          )}
+
+          {activeSrc && !isFailed ? (
+            <img
+              src={activeSrc}
+              loading="lazy"
+              alt={image.fileName}
+              onLoad={() => setIsLoaded(true)}
+              onError={handleError}
+              className={`h-full w-full object-cover transition-opacity ${isLoaded ? "opacity-100" : "opacity-0"}`}
+            />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground px-3 text-center">
+              Imagem indisponivel neste ambiente.
+            </div>
+          )}
+        </div>
+      </button>
+
+      <div className="p-3 space-y-1">
+        <p className="text-sm font-medium text-foreground truncate" title={image.fileName}>
+          {image.fileName}
+        </p>
+        <p className="text-xs text-muted-foreground">{formatDateTime(image.createdAt)}</p>
+        <p className="text-xs text-muted-foreground">
+          {image.mimeType || "image/*"} - {formatImageSize(image.fileSize)}
+        </p>
+      </div>
+    </article>
+  );
+};
+
 const ProductionTrackingPublicPage = () => {
   const { token = "" } = useParams<{ token: string }>();
   const [data, setData] = useState<SharedProductionSnapshot | null>(null);
@@ -73,8 +243,23 @@ const ProductionTrackingPublicPage = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [requestError, setRequestError] = useState("");
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
+  const [selectedImage, setSelectedImage] = useState<SelectedImage | null>(null);
 
   const normalizedToken = useMemo(() => token.trim(), [token]);
+  const publicImages = useMemo<PublicImageCardData[]>(() => {
+    if (!data) {
+      return [];
+    }
+
+    return data.images.map((image) => ({
+      id: image.id,
+      fileName: image.fileName || `imagem-${image.id}`,
+      mimeType: image.mimeType || "image/*",
+      fileSize: image.fileSize || 0,
+      createdAt: image.createdAt || "",
+      candidateUrls: buildImageCandidateUrls(normalizedToken, image),
+    }));
+  }, [data, normalizedToken]);
 
   const loadSnapshot = async ({ refresh = false, silentError = false }: { refresh?: boolean; silentError?: boolean } = {}) => {
     if (!normalizedToken) {
@@ -95,7 +280,7 @@ const ProductionTrackingPublicPage = () => {
     }
 
     try {
-      const snapshot = await getSharedProductionSnapshot(normalizedToken);
+      const snapshot = await getPublicProductionByToken(normalizedToken);
       setData(snapshot);
       setLastUpdatedAt(getSnapshotUpdatedAt(snapshot));
       setRequestError("");
@@ -241,6 +426,31 @@ const ProductionTrackingPublicPage = () => {
               )}
             </div>
 
+            <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Imagens da producao</p>
+                {isRefreshing && <span className="text-xs text-muted-foreground">Atualizando...</span>}
+              </div>
+
+              {publicImages.length === 0 ? (
+                <div className="mt-3 rounded border border-border bg-secondary/20 px-3 py-4 text-sm text-muted-foreground">
+                  Nenhuma imagem foi adicionada a esta producao ate o momento.
+                </div>
+              ) : (
+                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {publicImages.map((image) => (
+                    <PublicImageCard
+                      key={image.id}
+                      image={image}
+                      onOpen={(selected) => {
+                        setSelectedImage(selected);
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+
             <div className="rounded-xl border border-border bg-card p-4 sm:p-5 text-xs text-muted-foreground">
               Registro atualizado no sistema em {formatDateTime(data.updatedAt)}.
             </div>
@@ -248,9 +458,31 @@ const ProductionTrackingPublicPage = () => {
         )}
 
         <footer className="mt-8 text-center text-xs text-muted-foreground">
-          
+          Este link e atualizado automaticamente a cada 30 segundos.
         </footer>
       </section>
+
+      {selectedImage && (
+        <Modal
+          open={Boolean(selectedImage)}
+          onClose={() => setSelectedImage(null)}
+          title={selectedImage.fileName}
+          width="max-w-5xl"
+        >
+          <div className="space-y-3">
+            <div className="rounded border border-border bg-secondary/20 p-2 sm:p-3 max-h-[75dvh] overflow-auto">
+              <img
+                src={selectedImage.src}
+                alt={selectedImage.fileName}
+                className="mx-auto w-auto max-h-[68dvh] object-contain"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Enviado em {formatDateTime(selectedImage.createdAt)}.
+            </p>
+          </div>
+        </Modal>
+      )}
     </main>
   );
 };

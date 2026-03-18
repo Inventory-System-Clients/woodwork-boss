@@ -22,9 +22,25 @@ export interface EmployeeProduction {
   materials: ProductionMaterial[];
 }
 
+export interface ProductionImage {
+  id: string;
+  productionId: string;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  createdAt: string;
+  url?: string;
+}
+
+export interface SharedProductionImage extends Omit<ProductionImage, "productionId"> {
+  productionId?: string;
+  url: string;
+}
+
 export interface SharedProductionSnapshot extends EmployeeProduction {
   observations: string;
   updatedAt: string;
+  images: SharedProductionImage[];
 }
 
 export interface CreateProductionInput {
@@ -63,6 +79,16 @@ export type ProductionShareErrorCode =
   | "server_error"
   | "unknown";
 
+export type ProductionImageErrorCode =
+  | "bad_request"
+  | "payload_too_large"
+  | "unsupported_media_type"
+  | "unauthorized"
+  | "forbidden"
+  | "not_found"
+  | "server_error"
+  | "unknown";
+
 interface CompleteProductionErrorInput {
   status: number;
   code: CompleteProductionErrorCode;
@@ -73,6 +99,12 @@ interface CompleteProductionErrorInput {
 interface ProductionShareErrorInput {
   status: number;
   code: ProductionShareErrorCode;
+  message: string;
+}
+
+interface ProductionImageErrorInput {
+  status: number;
+  code: ProductionImageErrorCode;
   message: string;
 }
 
@@ -100,6 +132,17 @@ export class ProductionShareError extends Error {
   code: ProductionShareErrorCode;
 
   constructor({ status, code, message }: ProductionShareErrorInput) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export class ProductionImageError extends Error {
+  status: number;
+  code: ProductionImageErrorCode;
+
+  constructor({ status, code, message }: ProductionImageErrorInput) {
     super(message);
     this.status = status;
     this.code = code;
@@ -143,6 +186,9 @@ const unwrapDataEnvelope = (payload: unknown) => {
 
   return payload;
 };
+
+const MAX_IMAGES_PER_UPLOAD = 10;
+const MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024;
 
 const normalizeStatus = (status: unknown): ProductionStatus => {
   switch (status) {
@@ -437,6 +483,147 @@ const mapPublicProductionError = (error: ApiError) => {
   }
 };
 
+const mapProductionImageError = (error: ApiError) => {
+  switch (error.status) {
+    case 400:
+      return new ProductionImageError({
+        status: 400,
+        code: "bad_request",
+        message: "Falha ao enviar imagens. Verifique tipo, tamanho e quantidade dos arquivos.",
+      });
+    case 401:
+      return new ProductionImageError({
+        status: 401,
+        code: "unauthorized",
+        message: "Sessao expirada ou invalida. Faca login novamente.",
+      });
+    case 403:
+      return new ProductionImageError({
+        status: 403,
+        code: "forbidden",
+        message: "Acesso negado. Apenas admin e gerente podem gerenciar imagens da producao.",
+      });
+    case 404:
+      return new ProductionImageError({
+        status: 404,
+        code: "not_found",
+        message: "Producao nao encontrada.",
+      });
+    case 413:
+      return new ProductionImageError({
+        status: 413,
+        code: "payload_too_large",
+        message: "Arquivo muito grande. O limite por imagem e 8MB.",
+      });
+    case 415:
+      return new ProductionImageError({
+        status: 415,
+        code: "unsupported_media_type",
+        message: "Formato de arquivo invalido. Envie apenas arquivos de imagem.",
+      });
+    case 500:
+      return new ProductionImageError({
+        status: 500,
+        code: "server_error",
+        message: "Erro interno ao processar imagens da producao.",
+      });
+    default:
+      return new ProductionImageError({
+        status: error.status,
+        code: "unknown",
+        message: error.message || "Nao foi possivel processar imagens da producao.",
+      });
+  }
+};
+
+const mapProductionImage = (value: unknown): ProductionImage | null => {
+  const image = toRecord(value);
+
+  if (!image) {
+    return null;
+  }
+
+  const id = toStringSafe(image.id ?? image.imageId ?? image.image_id, "").trim();
+
+  if (!id) {
+    return null;
+  }
+
+  const fileName = toStringSafe(image.fileName ?? image.file_name, "").trim();
+  const mimeType = toStringSafe(image.mimeType ?? image.mime_type, "").trim();
+  const createdAt = toStringSafe(image.createdAt ?? image.created_at, "").trim();
+  const productionId = toStringSafe(image.productionId ?? image.production_id, "").trim();
+  const url = toStringSafe(image.url ?? image.fileUrl ?? image.file_url, "").trim();
+
+  return {
+    id,
+    productionId,
+    fileName: fileName || `imagem-${id}`,
+    mimeType: mimeType || "image/*",
+    fileSize: toNumber(image.fileSize ?? image.file_size),
+    createdAt,
+    ...(url ? { url } : {}),
+  };
+};
+
+const mapSharedProductionImage = (value: unknown): SharedProductionImage | null => {
+  const parsed = mapProductionImage(value);
+
+  if (!parsed) {
+    return null;
+  }
+
+  return {
+    ...parsed,
+    productionId: parsed.productionId || undefined,
+    url: toStringSafe(parsed.url, "").trim(),
+  };
+};
+
+const mapProductionImageCollection = (payload: unknown): ProductionImage[] => {
+  return parseCollection<unknown>(unwrapDataEnvelope(payload))
+    .map(mapProductionImage)
+    .filter((item): item is ProductionImage => Boolean(item));
+};
+
+const validateUploadImages = (files: File[]) => {
+  if (!files.length) {
+    throw new ProductionImageError({
+      status: 400,
+      code: "bad_request",
+      message: "Selecione ao menos uma imagem para enviar.",
+    });
+  }
+
+  if (files.length > MAX_IMAGES_PER_UPLOAD) {
+    throw new ProductionImageError({
+      status: 400,
+      code: "bad_request",
+      message: `Envie no maximo ${MAX_IMAGES_PER_UPLOAD} imagens por envio.`,
+    });
+  }
+
+  const invalidTypeFile = files.find((file) => !file.type || !file.type.startsWith("image/"));
+
+  if (invalidTypeFile) {
+    throw new ProductionImageError({
+      status: 400,
+      code: "bad_request",
+      message: `Arquivo invalido: ${invalidTypeFile.name}. Envie apenas imagens.`,
+    });
+  }
+
+  const oversizedFile = files.find((file) => file.size > MAX_IMAGE_SIZE_BYTES);
+
+  if (oversizedFile) {
+    throw new ProductionImageError({
+      status: 400,
+      code: "bad_request",
+      message: `Arquivo muito grande: ${oversizedFile.name}. O limite por imagem e 8MB.`,
+    });
+  }
+};
+
 const mapMaterial = (value: unknown): ProductionMaterial | null => {
   if (!value || typeof value !== "object") {
     return null;
@@ -501,7 +688,7 @@ const mapProduction = (value: unknown): EmployeeProduction | null => {
   };
 };
 
-const mapSharedProduction = (value: unknown): SharedProductionSnapshot | null => {
+const mapSharedProduction = (value: unknown, token: string): SharedProductionSnapshot | null => {
   const production = mapProduction(value);
 
   if (!production || !value || typeof value !== "object") {
@@ -509,11 +696,26 @@ const mapSharedProduction = (value: unknown): SharedProductionSnapshot | null =>
   }
 
   const item = value as Record<string, unknown>;
+  const sourceImages = Array.isArray(item.images) ? item.images : [];
+  const encodedToken = encodeURIComponent(token.trim());
+  const fallbackBasePath = encodedToken
+    ? `/api/public/productions/${encodedToken}/images`
+    : "";
+
+  const images = sourceImages
+    .map(mapSharedProductionImage)
+    .filter((image): image is SharedProductionImage => Boolean(image))
+    .map((image) => ({
+      ...image,
+      url: image.url || (fallbackBasePath ? `${fallbackBasePath}/${encodeURIComponent(image.id)}` : ""),
+    }))
+    .filter((image) => Boolean(image.url));
 
   return {
     ...production,
     observations: toStringSafe(item.observations ?? item.notes ?? item.note ?? item.description, "").trim(),
     updatedAt: toStringSafe(item.updatedAt ?? item.updated_at, ""),
+    images,
   };
 };
 
@@ -554,6 +756,96 @@ export const createProduction = async (input: CreateProductionInput) => {
   });
 
   return ensureProduction(payload, "Nao foi possivel criar a producao.");
+};
+
+export const listProductionImages = async (productionId: string): Promise<ProductionImage[]> => {
+  const normalizedId = productionId.trim();
+
+  if (!normalizedId) {
+    throw new ProductionImageError({
+      status: 400,
+      code: "not_found",
+      message: "ID da producao invalido para consulta de imagens.",
+    });
+  }
+
+  try {
+    const payload = await request<unknown>(`/productions/${normalizedId}/images`);
+    return mapProductionImageCollection(payload);
+  } catch (error) {
+    if (error instanceof ProductionImageError) {
+      throw error;
+    }
+
+    if (error instanceof ApiError) {
+      throw mapProductionImageError(error);
+    }
+
+    if (error instanceof Error) {
+      throw new ProductionImageError({
+        status: 0,
+        code: "unknown",
+        message: error.message,
+      });
+    }
+
+    throw new ProductionImageError({
+      status: 0,
+      code: "unknown",
+      message: "Falha inesperada ao listar imagens da producao.",
+    });
+  }
+};
+
+export const uploadProductionImages = async (productionId: string, files: File[]): Promise<ProductionImage[]> => {
+  const normalizedId = productionId.trim();
+
+  if (!normalizedId) {
+    throw new ProductionImageError({
+      status: 400,
+      code: "not_found",
+      message: "ID da producao invalido para upload de imagens.",
+    });
+  }
+
+  validateUploadImages(files);
+
+  const formData = new FormData();
+
+  files.forEach((file) => {
+    formData.append("images", file);
+  });
+
+  try {
+    const payload = await request<unknown>(`/productions/${normalizedId}/images`, {
+      method: "POST",
+      body: formData,
+    });
+
+    return mapProductionImageCollection(payload);
+  } catch (error) {
+    if (error instanceof ProductionImageError) {
+      throw error;
+    }
+
+    if (error instanceof ApiError) {
+      throw mapProductionImageError(error);
+    }
+
+    if (error instanceof Error) {
+      throw new ProductionImageError({
+        status: 0,
+        code: "unknown",
+        message: error.message,
+      });
+    }
+
+    throw new ProductionImageError({
+      status: 0,
+      code: "unknown",
+      message: "Falha inesperada ao enviar imagens da producao.",
+    });
+  }
 };
 
 export const createProductionShareLink = async (productionId: string): Promise<ProductionShareLink> => {
@@ -653,10 +945,12 @@ export const createProductionShareLink = async (productionId: string): Promise<P
   }
 };
 
-export const getSharedProductionSnapshot = async (token: string) => {
+export const getPublicProductionByToken = async (token: string) => {
+  const normalizedToken = token.trim();
+
   try {
-    const payload = await fetchPublicProductionByToken(token);
-    const normalized = mapSharedProduction(unwrapDataEnvelope(payload));
+    const payload = await fetchPublicProductionByToken(normalizedToken);
+    const normalized = mapSharedProduction(unwrapDataEnvelope(payload), normalizedToken);
 
     if (!normalized) {
       throw new ProductionShareError({
@@ -691,6 +985,8 @@ export const getSharedProductionSnapshot = async (token: string) => {
     });
   }
 };
+
+export const getSharedProductionSnapshot = getPublicProductionByToken;
 
 export const advanceProductionStatus = async (productionId: string) => {
   try {
