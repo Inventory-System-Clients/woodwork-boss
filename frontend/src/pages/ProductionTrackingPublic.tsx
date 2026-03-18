@@ -248,9 +248,7 @@ const ProductionTrackingPublicPage = () => {
         )}
 
         <footer className="mt-8 text-center text-xs text-muted-foreground">
-          <Link to="/login" className="underline hover:text-foreground transition-colors">
-            Area interna da marcenaria
-          </Link>
+          
         </footer>
       </section>
     </main>
