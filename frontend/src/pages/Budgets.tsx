@@ -10,6 +10,7 @@ import { dispatchInventoryDataChanged } from "@/lib/inventory-events";
 import {
   ApproveBudgetError,
   ApproveBudgetStockDetail,
+  type BudgetApplicableCost as ApiBudgetApplicableCost,
   approveBudget,
   type BudgetExpenseDepartment as ApiBudgetExpenseDepartment,
   createBudget,
@@ -44,6 +45,8 @@ const formatStatus = (status: BudgetRow["status"]) => {
   switch (status) {
     case "draft":
       return "Rascunho";
+    case "pre_approved":
+      return "Pre-aprovado";
     case "pending":
       return "Pendente";
     case "approved":
@@ -137,6 +140,12 @@ interface BudgetExpenseDepartmentRow {
   amount: number;
 }
 
+interface BudgetApplicableCostRow {
+  applicableCostId?: string;
+  name: string;
+  amount: number;
+}
+
 interface BudgetRow {
   id: string;
   clientId: string;
@@ -147,12 +156,18 @@ interface BudgetRow {
   deliveryDate: string;
   notes: string | null;
   approvedAt: string | null;
+  costsApplicableValue: number;
+  costsAppliedAt: string | null;
+  costsAppliedValue: number;
+  remainingCostToApply: number;
   createdAt: string;
   updatedAt: string;
   items: BudgetItemRow[];
   expenseDepartments: BudgetExpenseDepartmentRow[];
+  applicableCosts: BudgetApplicableCostRow[];
   materialCost: number;
   expenseDepartmentsCost: number;
+  applicableCostsCost: number;
   laborCost: number;
   totalCost: number;
   profitMargin: number;
@@ -165,6 +180,23 @@ const normalizeDateOnly = (value: string | null | undefined) => {
   }
 
   return value.includes("T") ? value.split("T")[0] : value;
+};
+
+const formatDateTime = (value: string | null | undefined) => {
+  if (!value) {
+    return "-";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("pt-BR", {
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(date);
 };
 
 const normalizeName = (value: string) => value.trim().toLowerCase();
@@ -291,6 +323,118 @@ const extractExpenseDepartmentsFieldErrors = (error: unknown) => {
   return output;
 };
 
+const extractApplicableCostsFieldErrors = (error: unknown) => {
+  if (!(error instanceof ApiError) || error.status !== 400) {
+    return {} as Record<string, string>;
+  }
+
+  const payload = error.payload;
+
+  if (!payload || typeof payload !== "object") {
+    return {} as Record<string, string>;
+  }
+
+  const output: Record<string, string> = {};
+  const candidates: Array<{ path?: string; message?: string }> = [];
+
+  const record = payload as Record<string, unknown>;
+
+  const collectCandidate = (value: unknown) => {
+    if (!value || typeof value !== "object") {
+      return;
+    }
+
+    const item = value as Record<string, unknown>;
+    candidates.push({
+      path: typeof item.path === "string" ? item.path : typeof item.field === "string" ? item.field : undefined,
+      message:
+        typeof item.message === "string"
+          ? item.message
+          : typeof item.msg === "string"
+            ? item.msg
+            : undefined,
+    });
+  };
+
+  if (Array.isArray(record.errors)) {
+    record.errors.forEach(collectCandidate);
+  }
+
+  if (Array.isArray(record.details)) {
+    record.details.forEach(collectCandidate);
+  }
+
+  const applicablePathRegex = /applicable(?:_|)costs?\[(\d+)\]\.(name|amount)/i;
+
+  candidates.forEach((candidate) => {
+    if (!candidate.path) {
+      return;
+    }
+
+    const match = candidate.path.match(applicablePathRegex);
+
+    if (!match) {
+      return;
+    }
+
+    const [, index, field] = match;
+    output[`${index}-${field.toLowerCase()}`] = candidate.message || "Campo invalido.";
+  });
+
+  return output;
+};
+
+const extractStatusFieldError = (error: unknown) => {
+  if (!(error instanceof ApiError) || error.status !== 400) {
+    return "";
+  }
+
+  const payload = error.payload;
+
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+
+  const record = payload as Record<string, unknown>;
+  const candidates: Array<{ path?: string; message?: string }> = [];
+
+  const collectCandidate = (value: unknown) => {
+    if (!value || typeof value !== "object") {
+      return;
+    }
+
+    const item = value as Record<string, unknown>;
+    candidates.push({
+      path:
+        typeof item.path === "string"
+          ? item.path
+          : typeof item.field === "string"
+            ? item.field
+            : undefined,
+      message:
+        typeof item.message === "string"
+          ? item.message
+          : typeof item.msg === "string"
+            ? item.msg
+            : undefined,
+    });
+  };
+
+  if (Array.isArray(record.errors)) {
+    record.errors.forEach(collectCandidate);
+  }
+
+  if (Array.isArray(record.details)) {
+    record.details.forEach(collectCandidate);
+  }
+
+  const statusError = candidates.find(
+    (candidate) => typeof candidate.path === "string" && /(^|\.)status$/i.test(candidate.path),
+  );
+
+  return statusError?.message || "";
+};
+
 const mapBudgetItemFromApi = (item: ApiBudgetMaterial): BudgetItemRow => ({
   productId: item.productId || undefined,
   productName: item.productName,
@@ -309,6 +453,14 @@ const mapBudgetExpenseDepartmentFromApi = (
   amount: Math.max(0, Number(department.amount) || 0),
 });
 
+const mapBudgetApplicableCostFromApi = (
+  cost: ApiBudgetApplicableCost,
+): BudgetApplicableCostRow => ({
+  applicableCostId: cost.applicableCostId || undefined,
+  name: cost.name,
+  amount: Math.max(0, Number(cost.amount) || 0),
+});
+
 const createEmptyMaterialInput = (mode: MaterialInputMode = "existing") => ({
   mode,
   productId: "",
@@ -322,6 +474,12 @@ const createEmptyExpenseDepartment = (): BudgetExpenseDepartmentRow => ({
   expenseDepartmentId: undefined,
   name: "",
   sector: "",
+  amount: 0,
+});
+
+const createEmptyApplicableCost = (): BudgetApplicableCostRow => ({
+  applicableCostId: undefined,
+  name: "",
   amount: 0,
 });
 
@@ -345,22 +503,51 @@ const getStockBadge = (stockQuantity: number) => {
 const mapBudgetFromApi = (budget: ApiBudget, clientsCatalog: Client[] = []): BudgetRow => {
   const items = budget.materials.map(mapBudgetItemFromApi);
   const expenseDepartments = budget.expenseDepartments.map(mapBudgetExpenseDepartmentFromApi);
+  const applicableCosts = (budget.applicableCosts || []).map(mapBudgetApplicableCostFromApi);
   const materialCost = items.reduce((sum, item) => sum + item.subtotal, 0);
+  const applicableCostsFromList = applicableCosts.reduce((sum, cost) => sum + cost.amount, 0);
+  const costsApplicableValueFromApi = Number(
+    budget.financialSummary?.costsApplicableValue ?? budget.costsApplicableValue,
+  );
+  const hasCostsApplicableValueFromApi = Number.isFinite(costsApplicableValueFromApi);
+  const costsApplicableValue = hasCostsApplicableValueFromApi
+    ? Math.max(0, costsApplicableValueFromApi)
+    : Number.isFinite(Number(budget.financialSummary?.applicableCostsCost))
+      ? Math.max(0, Number(budget.financialSummary?.applicableCostsCost))
+      : applicableCostsFromList;
   const expenseDepartmentsCost = Number.isFinite(Number(budget.financialSummary?.expenseDepartmentsCost))
     ? Math.max(0, Number(budget.financialSummary?.expenseDepartmentsCost))
     : expenseDepartments.reduce((sum, department) => sum + department.amount, 0);
+  const applicableCostsCost = costsApplicableValue;
   const apiTotalCost = Number(budget.totalCost);
   const apiLaborCost = Number(budget.laborCost);
   const finalPrice = Number(budget.totalPrice) || 0;
   const laborCost = Number.isFinite(apiLaborCost)
     ? Math.max(0, apiLaborCost)
-    : Math.max(0, Number.isFinite(apiTotalCost) ? apiTotalCost - materialCost : 0);
+    : Math.max(
+        0,
+        Number.isFinite(apiTotalCost)
+          ? apiTotalCost - materialCost - expenseDepartmentsCost - applicableCostsCost
+          : 0,
+      );
   const totalCost = Number.isFinite(apiTotalCost)
     ? Math.max(0, apiTotalCost)
-    : materialCost + laborCost + expenseDepartmentsCost;
+    : materialCost + laborCost + expenseDepartmentsCost + applicableCostsCost;
   const profitMargin = totalCost > 0 ? Math.max(0, (finalPrice - totalCost) / totalCost) : 0;
 
   const linkedClient = findClientByName(clientsCatalog, budget.clientName);
+  const costsAppliedAt =
+    budget.financialSummary?.costsAppliedAt ?? budget.costsAppliedAt ?? null;
+  const costsAppliedValue = Math.max(
+    0,
+    Number(
+      budget.financialSummary?.costsAppliedValue ?? budget.costsAppliedValue ?? 0,
+    ) || 0,
+  );
+  const remainingCostToApply = Math.max(
+    0,
+    Number(budget.financialSummary?.remainingCostToApply ?? 0) || 0,
+  );
 
   return {
     id: budget.id,
@@ -372,12 +559,18 @@ const mapBudgetFromApi = (budget: ApiBudget, clientsCatalog: Client[] = []): Bud
     deliveryDate: normalizeDateOnly(budget.deliveryDate),
     notes: budget.notes,
     approvedAt: budget.approvedAt,
+    costsApplicableValue,
+    costsAppliedAt,
+    costsAppliedValue,
+    remainingCostToApply,
     createdAt: normalizeDateOnly(budget.createdAt),
     updatedAt: normalizeDateOnly(budget.updatedAt),
     items,
     expenseDepartments,
+    applicableCosts,
     materialCost,
     expenseDepartmentsCost,
+    applicableCostsCost,
     laborCost,
     totalCost,
     profitMargin,
@@ -497,13 +690,16 @@ const replaceContractPlaceholders = (value: string, contractValue: number) =>
 const createInitialBudgetForm = () => ({
   clientId: "",
   category: "arquitetonico" as BudgetCategory,
+  status: "draft" as BudgetStatus,
   description: "",
   deliveryDate: "",
   notes: "",
   laborCost: 0,
+  costsApplicableValue: 0,
   profitMargin: 0.35,
   items: [] as BudgetItemRow[],
   expenseDepartments: [] as BudgetExpenseDepartmentRow[],
+  applicableCosts: [] as BudgetApplicableCostRow[],
 });
 
 const createInitialDetailForm = () => ({
@@ -514,8 +710,10 @@ const createInitialDetailForm = () => ({
   notes: "",
   status: "draft" as BudgetStatus,
   totalPrice: 0,
+  costsApplicableValue: 0,
   items: [] as BudgetItemRow[],
   expenseDepartments: [] as BudgetExpenseDepartmentRow[],
+  applicableCosts: [] as BudgetApplicableCostRow[],
 });
 
 const BudgetsPage = () => {
@@ -525,7 +723,9 @@ const BudgetsPage = () => {
   const [requestError, setRequestError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [formError, setFormError] = useState("");
+  const [statusFieldError, setStatusFieldError] = useState("");
   const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [preApprovingId, setPreApprovingId] = useState<string | null>(null);
   const [generatingPdfId, setGeneratingPdfId] = useState<string | null>(null);
   const [contractModalOpen, setContractModalOpen] = useState(false);
   const [selectedBudgetForContract, setSelectedBudgetForContract] = useState<BudgetRow | null>(null);
@@ -536,6 +736,7 @@ const BudgetsPage = () => {
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [isUpdatingDetail, setIsUpdatingDetail] = useState(false);
   const [detailError, setDetailError] = useState("");
+  const [detailStatusFieldError, setDetailStatusFieldError] = useState("");
   const [productsCatalog, setProductsCatalog] = useState<Product[]>([]);
   const [isLoadingProducts, setIsLoadingProducts] = useState(false);
   const [productsError, setProductsError] = useState("");
@@ -546,6 +747,9 @@ const BudgetsPage = () => {
   const [detailExpenseDepartmentsSearch, setDetailExpenseDepartmentsSearch] = useState("");
   const [expenseDepartmentsFieldErrors, setExpenseDepartmentsFieldErrors] = useState<Record<string, string>>({});
   const [detailExpenseDepartmentsFieldErrors, setDetailExpenseDepartmentsFieldErrors] = useState<Record<string, string>>({});
+  const [applicableCostsFieldErrors, setApplicableCostsFieldErrors] = useState<Record<string, string>>({});
+  const [detailApplicableCostsFieldErrors, setDetailApplicableCostsFieldErrors] = useState<Record<string, string>>({});
+  const [selectedToPreApprove, setSelectedToPreApprove] = useState<BudgetRow | null>(null);
   const [selectedToApprove, setSelectedToApprove] = useState<BudgetRow | null>(null);
   const [approvalError, setApprovalError] = useState("");
   const [approvalDetails, setApprovalDetails] = useState<ApproveBudgetStockDetail[]>([]);
@@ -554,6 +758,10 @@ const BudgetsPage = () => {
   const [clientsError, setClientsError] = useState("");
   const [detailForm, setDetailForm] = useState(createInitialDetailForm());
   const [form, setForm] = useState(createInitialBudgetForm);
+  const [pendingStatusChange, setPendingStatusChange] = useState<{
+    scope: "create" | "detail";
+    previousStatus: BudgetStatus;
+  } | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<"all" | BudgetCategory>("all");
   const [newItem, setNewItem] = useState(createEmptyMaterialInput);
   const [detailNewItem, setDetailNewItem] = useState(createEmptyMaterialInput);
@@ -673,7 +881,9 @@ const BudgetsPage = () => {
   const openCreateModal = () => {
     setModal(true);
     setFormError("");
+    setStatusFieldError("");
     setExpenseDepartmentsFieldErrors({});
+    setApplicableCostsFieldErrors({});
     setExpenseDepartmentsSearch("");
     void loadClientsForForms();
     void loadProductsForForm();
@@ -704,13 +914,151 @@ const BudgetsPage = () => {
     return () => window.clearTimeout(timeoutId);
   }, [detailExpenseDepartmentsSearch, detailModalOpen]);
 
+  const requestStatusChange = (scope: "create" | "detail", nextStatus: BudgetStatus) => {
+    if (nextStatus !== "pre_approved") {
+      if (scope === "create") {
+        setForm((current) => ({ ...current, status: nextStatus }));
+        setStatusFieldError("");
+      } else {
+        setDetailForm((current) => ({ ...current, status: nextStatus }));
+        setDetailStatusFieldError("");
+      }
+      return;
+    }
+
+    const previousStatus = scope === "create" ? form.status : detailForm.status;
+
+    if (previousStatus === "pre_approved") {
+      return;
+    }
+
+    setPendingStatusChange({
+      scope,
+      previousStatus,
+    });
+  };
+
+  const cancelPreApprovedStatusChange = () => {
+    if (pendingStatusChange?.scope === "create") {
+      setForm((current) => ({ ...current, status: pendingStatusChange.previousStatus }));
+    }
+
+    if (pendingStatusChange?.scope === "detail") {
+      setDetailForm((current) => ({ ...current, status: pendingStatusChange.previousStatus }));
+    }
+
+    setPendingStatusChange(null);
+  };
+
+  const confirmPreApprovedStatusChange = () => {
+    if (!pendingStatusChange) {
+      return;
+    }
+
+    if (pendingStatusChange.scope === "create") {
+      setForm((current) => ({ ...current, status: "pre_approved" }));
+      setStatusFieldError("");
+    } else {
+      setDetailForm((current) => ({ ...current, status: "pre_approved" }));
+      setDetailStatusFieldError("");
+    }
+
+    setPendingStatusChange(null);
+  };
+
   const clearApprovalFeedback = () => {
     setApprovalError("");
     setApprovalDetails([]);
   };
 
+  const openPreApproveModal = (budget: BudgetRow) => {
+    if (preApprovingId || budget.status === "pre_approved" || budget.status === "approved") {
+      return;
+    }
+
+    setRequestError("");
+    const shouldUseDetailCostsApplicableValue =
+      detailModalOpen && selectedBudget?.id === budget.id;
+
+    if (shouldUseDetailCostsApplicableValue) {
+      setSelectedToPreApprove({
+        ...budget,
+        costsApplicableValue: Math.max(0, Number(detailForm.costsApplicableValue) || 0),
+      });
+      return;
+    }
+
+    setSelectedToPreApprove(budget);
+  };
+
+  const closePreApproveModal = () => {
+    if (preApprovingId) {
+      return;
+    }
+
+    setSelectedToPreApprove(null);
+  };
+
+  const confirmPreApproveBudget = async () => {
+    if (!selectedToPreApprove || preApprovingId) {
+      return;
+    }
+
+    const budgetId = selectedToPreApprove.id;
+    setPreApprovingId(budgetId);
+    setRequestError("");
+
+    try {
+      const preApprovePayload: {
+        status: BudgetStatus;
+        costsApplicableValue?: number;
+      } = { status: "pre_approved" };
+
+      const shouldUseDetailCostsApplicableValue =
+        detailModalOpen && selectedBudget?.id === budgetId;
+
+      if (shouldUseDetailCostsApplicableValue) {
+        preApprovePayload.costsApplicableValue = Math.max(0, Number(detailForm.costsApplicableValue) || 0);
+      }
+
+      const updated = mapBudgetFromApi(
+        await updateBudget(budgetId, preApprovePayload),
+        clientsCatalog,
+      );
+
+      setData((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+
+      setSelectedBudget((current) => {
+        if (!current || current.id !== updated.id) {
+          return current;
+        }
+
+        return updated;
+      });
+
+      setDetailForm((current) => {
+        if (!selectedBudget || selectedBudget.id !== updated.id) {
+          return current;
+        }
+
+        return {
+          ...current,
+          status: updated.status,
+          costsApplicableValue: updated.costsApplicableValue,
+        };
+      });
+
+      closePreApproveModal();
+      await loadBudgetsFromApi();
+    } catch (error) {
+      setRequestError(normalizeBudgetError(error, "Nao foi possivel pre-aprovar o orçamento."));
+    } finally {
+      setPreApprovingId(null);
+    }
+  };
+
   const openApproveModal = (budget: BudgetRow) => {
-    if (approvingId) {
+    if (approvingId || budget.status !== "pre_approved") {
       return;
     }
 
@@ -856,6 +1204,31 @@ const BudgetsPage = () => {
     setDetailForm((current) => ({ ...current, expenseDepartments: nextDepartments }));
   };
 
+  const addApplicableCost = () => {
+    setForm((current) => ({
+      ...current,
+      applicableCosts: [...current.applicableCosts, createEmptyApplicableCost()],
+    }));
+  };
+
+  const addDetailApplicableCost = () => {
+    if (!selectedBudget) {
+      return;
+    }
+
+    const nextApplicableCosts = [...selectedBudget.applicableCosts, createEmptyApplicableCost()];
+
+    setSelectedBudget((current) =>
+      current
+        ? {
+            ...current,
+            applicableCosts: nextApplicableCosts,
+          }
+        : current,
+    );
+    setDetailForm((current) => ({ ...current, applicableCosts: nextApplicableCosts }));
+  };
+
   const removeExpenseDepartment = (index: number) => {
     setForm((current) => ({
       ...current,
@@ -888,6 +1261,46 @@ const BudgetsPage = () => {
     });
 
     setDetailExpenseDepartmentsFieldErrors((current) => {
+      const nextEntries = Object.entries(current).filter(
+        ([key]) => !key.startsWith(`${index}-`),
+      );
+      return Object.fromEntries(nextEntries);
+    });
+  };
+
+  const removeApplicableCost = (index: number) => {
+    setForm((current) => ({
+      ...current,
+      applicableCosts: current.applicableCosts.filter((_, costIndex) => costIndex !== index),
+    }));
+
+    setApplicableCostsFieldErrors((current) => {
+      const nextEntries = Object.entries(current).filter(
+        ([key]) => !key.startsWith(`${index}-`),
+      );
+      return Object.fromEntries(nextEntries);
+    });
+  };
+
+  const removeDetailApplicableCost = (index: number) => {
+    setSelectedBudget((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const nextApplicableCosts = current.applicableCosts.filter(
+        (_, costIndex) => costIndex !== index,
+      );
+
+      setDetailForm((detailCurrent) => ({ ...detailCurrent, applicableCosts: nextApplicableCosts }));
+
+      return {
+        ...current,
+        applicableCosts: nextApplicableCosts,
+      };
+    });
+
+    setDetailApplicableCostsFieldErrors((current) => {
       const nextEntries = Object.entries(current).filter(
         ([key]) => !key.startsWith(`${index}-`),
       );
@@ -994,6 +1407,105 @@ const BudgetsPage = () => {
     });
   };
 
+  const updateApplicableCostField = (
+    index: number,
+    field: keyof BudgetApplicableCostRow,
+    value: string | number,
+  ) => {
+    setForm((current) => ({
+      ...current,
+      applicableCosts: current.applicableCosts.map((cost, costIndex) => {
+        if (costIndex !== index) {
+          return cost;
+        }
+
+        if (field === "amount") {
+          return {
+            ...cost,
+            amount: Math.max(0, Number(value) || 0),
+          };
+        }
+
+        if (field === "applicableCostId") {
+          return {
+            ...cost,
+            applicableCostId: typeof value === "string" && value ? value : undefined,
+          };
+        }
+
+        return {
+          ...cost,
+          [field]: typeof value === "string" ? value : String(value),
+        };
+      }),
+    }));
+
+    setApplicableCostsFieldErrors((current) => {
+      if (!current[`${index}-${field}`]) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[`${index}-${field}`];
+      return next;
+    });
+  };
+
+  const updateDetailApplicableCostField = (
+    index: number,
+    field: keyof BudgetApplicableCostRow,
+    value: string | number,
+  ) => {
+    if (!selectedBudget) {
+      return;
+    }
+
+    const nextApplicableCosts = selectedBudget.applicableCosts.map((cost, costIndex) => {
+      if (costIndex !== index) {
+        return cost;
+      }
+
+      if (field === "amount") {
+        return {
+          ...cost,
+          amount: Math.max(0, Number(value) || 0),
+        };
+      }
+
+      if (field === "applicableCostId") {
+        return {
+          ...cost,
+          applicableCostId: typeof value === "string" && value ? value : undefined,
+        };
+      }
+
+      return {
+        ...cost,
+        [field]: typeof value === "string" ? value : String(value),
+      };
+    });
+
+    setSelectedBudget((current) =>
+      current
+        ? {
+            ...current,
+            applicableCosts: nextApplicableCosts,
+          }
+        : current,
+    );
+    setDetailForm((current) => ({ ...current, applicableCosts: nextApplicableCosts }));
+
+    setDetailApplicableCostsFieldErrors((current) => {
+      if (!current[`${index}-${field}`]) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[`${index}-${field}`];
+      return next;
+    });
+  };
+
   const applyCatalogToExpenseDepartment = (index: number, catalogId: string) => {
     const selectedCatalog = expenseDepartmentsCatalog.find((department) => department.id === catalogId);
 
@@ -1065,6 +1577,22 @@ const BudgetsPage = () => {
     return errors;
   };
 
+  const validateApplicableCosts = (costs: BudgetApplicableCostRow[]) => {
+    const errors: Record<string, string> = {};
+
+    costs.forEach((cost, index) => {
+      if (!cost.name.trim()) {
+        errors[`${index}-name`] = "Nome obrigatorio.";
+      }
+
+      if (!Number.isFinite(cost.amount) || cost.amount < 0) {
+        errors[`${index}-amount`] = "Valor deve ser maior ou igual a zero.";
+      }
+    });
+
+    return errors;
+  };
+
   const calc = calculateBudget(
     form.items.map((item) => ({
       ...item,
@@ -1078,8 +1606,14 @@ const BudgetsPage = () => {
     (sum, department) => sum + (Number(department.amount) || 0),
     0,
   );
+  const applicableCostsListCost = form.applicableCosts.reduce(
+    (sum, cost) => sum + (Number(cost.amount) || 0),
+    0,
+  );
 
-  const totalCostWithExpenses = calc.materialCost + form.laborCost + expenseDepartmentsCost;
+  const costsApplicableValue = Math.max(0, Number(form.costsApplicableValue) || 0);
+
+  const totalCostWithExpenses = calc.materialCost + form.laborCost + expenseDepartmentsCost + costsApplicableValue;
   const finalPriceWithExpenses = totalCostWithExpenses * (1 + form.profitMargin);
 
   const detailMaterialCost = (selectedBudget?.items || []).reduce(
@@ -1091,21 +1625,26 @@ const BudgetsPage = () => {
     (sum, department) => sum + (Number(department.amount) || 0),
     0,
   );
+  const detailApplicableCostsCost = Math.max(0, Number(detailForm.costsApplicableValue) || 0);
 
   const detailLaborCost = Math.max(0, Number(selectedBudget?.laborCost) || 0);
   const detailProfitMargin = Math.max(0, Number(selectedBudget?.profitMargin) || 0);
-  const detailTotalCostWithExpenses = detailMaterialCost + detailLaborCost + detailExpenseDepartmentsCost;
+  const detailTotalCostWithExpenses =
+    detailMaterialCost + detailLaborCost + detailExpenseDepartmentsCost + detailApplicableCostsCost;
   const detailFinalPriceWithExpenses = detailTotalCostWithExpenses * (1 + detailProfitMargin);
 
   const closeCreateModal = () => {
     setModal(false);
     setFormError("");
+    setStatusFieldError("");
     setForm(createInitialBudgetForm());
     setProductsError("");
     setExpenseDepartmentsCatalogError("");
     setExpenseDepartmentsSearch("");
     setExpenseDepartmentsFieldErrors({});
+    setApplicableCostsFieldErrors({});
     setNewItem(createEmptyMaterialInput());
+    setPendingStatusChange((current) => (current?.scope === "create" ? null : current));
   };
 
   const saveBudget = async () => {
@@ -1126,12 +1665,25 @@ const BudgetsPage = () => {
       return;
     }
 
+    if (!form.status) {
+      setStatusFieldError("Selecione um status para o orçamento.");
+      setFormError("Selecione um status valido.");
+      return;
+    }
+
+    const normalizedFormCostsApplicableValue = Number(form.costsApplicableValue ?? 0);
+    if (!Number.isFinite(normalizedFormCostsApplicableValue) || normalizedFormCostsApplicableValue < 0) {
+      setFormError("Informe um custo aplicavel valido (maior ou igual a zero).");
+      return;
+    }
+
     if (form.items.length === 0) {
       setFormError("Adicione ao menos um material no orçamento.");
       return;
     }
 
     const departmentErrors = validateExpenseDepartments(form.expenseDepartments);
+    const applicableCostsErrors = validateApplicableCosts(form.applicableCosts);
 
     if (Object.keys(departmentErrors).length > 0) {
       setExpenseDepartmentsFieldErrors(departmentErrors);
@@ -1139,9 +1691,17 @@ const BudgetsPage = () => {
       return;
     }
 
+    if (Object.keys(applicableCostsErrors).length > 0) {
+      setApplicableCostsFieldErrors(applicableCostsErrors);
+      setFormError("Revise os campos obrigatorios em custos aplicaveis.");
+      return;
+    }
+
     setIsSaving(true);
     setFormError("");
+    setStatusFieldError("");
     setExpenseDepartmentsFieldErrors({});
+    setApplicableCostsFieldErrors({});
 
     try {
       const created = await createBudget({
@@ -1150,8 +1710,9 @@ const BudgetsPage = () => {
         description: form.description.trim(),
         deliveryDate: form.deliveryDate ? new Date(`${form.deliveryDate}T00:00:00`).toISOString() : null,
         totalPrice: finalPriceWithExpenses,
+        costsApplicableValue,
         notes: form.notes.trim() ? form.notes.trim() : null,
-        status: "draft",
+        status: form.status,
         materials: form.items.map((item) => {
           const payloadItem = {
             productName: item.productName,
@@ -1175,6 +1736,11 @@ const BudgetsPage = () => {
           sector: department.sector.trim(),
           amount: Math.max(0, Number(department.amount) || 0),
         })),
+        applicableCosts: form.applicableCosts.map((cost) => ({
+          applicableCostId: cost.applicableCostId,
+          name: cost.name.trim(),
+          amount: Math.max(0, Number(cost.amount) || 0),
+        })),
       });
 
       setData((current) => [mapBudgetFromApi(created, clientsCatalog), ...current]);
@@ -1182,9 +1748,19 @@ const BudgetsPage = () => {
       closeCreateModal();
     } catch (error) {
       const apiFieldErrors = extractExpenseDepartmentsFieldErrors(error);
+      const apiApplicableCostsErrors = extractApplicableCostsFieldErrors(error);
+      const apiStatusError = extractStatusFieldError(error);
 
       if (Object.keys(apiFieldErrors).length > 0) {
         setExpenseDepartmentsFieldErrors(apiFieldErrors);
+      }
+
+      if (Object.keys(apiApplicableCostsErrors).length > 0) {
+        setApplicableCostsFieldErrors(apiApplicableCostsErrors);
+      }
+
+      if (apiStatusError) {
+        setStatusFieldError(apiStatusError);
       }
 
       setFormError(normalizeBudgetError(error, "Não foi possível criar o orçamento."));
@@ -1196,6 +1772,7 @@ const BudgetsPage = () => {
   const openBudgetDetail = async (budgetId: string) => {
     setDetailModalOpen(true);
     setDetailError("");
+    setDetailStatusFieldError("");
     setIsLoadingDetail(true);
 
     try {
@@ -1209,8 +1786,10 @@ const BudgetsPage = () => {
         notes: budget.notes || "",
         status: budget.status,
         totalPrice: budget.finalPrice,
+        costsApplicableValue: Math.max(0, Number(budget.costsApplicableValue) || 0),
         items: budget.items,
         expenseDepartments: budget.expenseDepartments,
+        applicableCosts: budget.applicableCosts,
       });
       void loadProductsForForm();
       void loadExpenseDepartmentsCatalog();
@@ -1226,10 +1805,13 @@ const BudgetsPage = () => {
     setDetailModalOpen(false);
     setSelectedBudget(null);
     setDetailError("");
+    setDetailStatusFieldError("");
     setDetailForm(createInitialDetailForm());
     setDetailNewItem(createEmptyMaterialInput());
     setDetailExpenseDepartmentsSearch("");
     setDetailExpenseDepartmentsFieldErrors({});
+    setDetailApplicableCostsFieldErrors({});
+    setPendingStatusChange((current) => (current?.scope === "detail" ? null : current));
   };
 
   const saveBudgetDetail = async () => {
@@ -1247,7 +1829,20 @@ const BudgetsPage = () => {
       return;
     }
 
+    if (!detailForm.status) {
+      setDetailStatusFieldError("Selecione um status para o orçamento.");
+      setDetailError("Selecione um status valido.");
+      return;
+    }
+
+    const normalizedDetailCostsApplicableValue = Number(detailForm.costsApplicableValue ?? 0);
+    if (!Number.isFinite(normalizedDetailCostsApplicableValue) || normalizedDetailCostsApplicableValue < 0) {
+      setDetailError("Informe um custo aplicavel valido (maior ou igual a zero).");
+      return;
+    }
+
     const departmentErrors = validateExpenseDepartments(detailForm.expenseDepartments);
+    const applicableCostsErrors = validateApplicableCosts(detailForm.applicableCosts);
 
     if (Object.keys(departmentErrors).length > 0) {
       setDetailExpenseDepartmentsFieldErrors(departmentErrors);
@@ -1255,9 +1850,17 @@ const BudgetsPage = () => {
       return;
     }
 
+    if (Object.keys(applicableCostsErrors).length > 0) {
+      setDetailApplicableCostsFieldErrors(applicableCostsErrors);
+      setDetailError("Revise os campos obrigatorios em custos aplicaveis.");
+      return;
+    }
+
     setIsUpdatingDetail(true);
     setDetailError("");
+    setDetailStatusFieldError("");
     setDetailExpenseDepartmentsFieldErrors({});
+    setDetailApplicableCostsFieldErrors({});
 
     try {
       const updated = mapBudgetFromApi(
@@ -1271,6 +1874,7 @@ const BudgetsPage = () => {
           notes: detailForm.notes.trim() ? detailForm.notes.trim() : null,
           status: detailForm.status,
           totalPrice: detailFinalPriceWithExpenses,
+          costsApplicableValue: Math.max(0, Number(detailForm.costsApplicableValue) || 0),
           materials: selectedBudget.items.map((item) => {
             const payloadItem = {
               productName: item.productName,
@@ -1294,6 +1898,11 @@ const BudgetsPage = () => {
             sector: department.sector.trim(),
             amount: Math.max(0, Number(department.amount) || 0),
           })),
+          applicableCosts: detailForm.applicableCosts.map((cost) => ({
+            applicableCostId: cost.applicableCostId,
+            name: cost.name.trim(),
+            amount: Math.max(0, Number(cost.amount) || 0),
+          })),
         }),
         clientsCatalog,
       );
@@ -1303,9 +1912,19 @@ const BudgetsPage = () => {
       closeDetailModal();
     } catch (error) {
       const apiFieldErrors = extractExpenseDepartmentsFieldErrors(error);
+      const apiApplicableCostsErrors = extractApplicableCostsFieldErrors(error);
+      const apiStatusError = extractStatusFieldError(error);
 
       if (Object.keys(apiFieldErrors).length > 0) {
         setDetailExpenseDepartmentsFieldErrors(apiFieldErrors);
+      }
+
+      if (Object.keys(apiApplicableCostsErrors).length > 0) {
+        setDetailApplicableCostsFieldErrors(apiApplicableCostsErrors);
+      }
+
+      if (apiStatusError) {
+        setDetailStatusFieldError(apiStatusError);
       }
 
       setDetailError(normalizeBudgetError(error, "Não foi possível atualizar o orçamento."));
@@ -1508,7 +2127,7 @@ const BudgetsPage = () => {
 
       y += 8;
       const summaryWidth = 78;
-      const summaryHeight = 40;
+      const summaryHeight = 46;
       const summaryX = pageWidth - marginX - summaryWidth;
 
       if (y + summaryHeight > pageHeight - 18) {
@@ -1524,6 +2143,7 @@ const BudgetsPage = () => {
       const summaryRows: Array<[string, string]> = [
         ["Materiais", formatCurrency(budget.materialCost)],
         ["Deptos. gasto", formatCurrency(budget.expenseDepartmentsCost)],
+        ["Custos aplic.", formatCurrency(budget.costsApplicableValue)],
         ["Mão de obra", formatCurrency(budget.laborCost)],
         ["Custo total", formatCurrency(budget.totalCost)],
         ["Margem", formatPercent(budget.profitMargin)],
@@ -1867,9 +2487,14 @@ const BudgetsPage = () => {
     },
     { key: "description", header: "Descrição" },
     {
-      key: "expenseDepartments",
-      header: "Deptos. gasto",
-      render: (b: BudgetRow) => `${b.expenseDepartments.length} • ${formatCurrency(b.expenseDepartmentsCost)}`,
+      key: "costsAppliedValue",
+      header: "Custos aplicados",
+      render: (b: BudgetRow) => formatCurrency(b.costsAppliedValue),
+    },
+    {
+      key: "remainingCostToApply",
+      header: "Custo restante",
+      render: (b: BudgetRow) => formatCurrency(b.remainingCostToApply),
     },
     { key: "finalPrice", header: "Preço Final", mono: true, render: (b: BudgetRow) => `R$ ${b.finalPrice.toFixed(2)}` },
     { key: "deliveryDate", header: "Entrega", mono: true, render: (b: BudgetRow) => b.deliveryDate || "-" },
@@ -1913,12 +2538,25 @@ const BudgetsPage = () => {
             <button
               onClick={(e) => {
                 e.stopPropagation();
+                openPreApproveModal(b);
+              }}
+              disabled={Boolean(preApprovingId) || Boolean(approvingId)}
+              className="px-2 py-1 text-[11px] font-bold rounded bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {preApprovingId === b.id ? "APLICANDO..." : "PRÉ-APROVAR"}
+            </button>
+          )}
+
+          {b.status === "pre_approved" && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
                 openApproveModal(b);
               }}
               disabled={Boolean(approvingId)}
               className="px-2 py-1 text-[11px] font-bold rounded bg-success/20 text-success hover:bg-success/30 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              {approvingId === b.id ? "APROVANDO..." : "APROVAR"}
+              {approvingId === b.id ? "APROVANDO..." : "APROVAR OFICIALMENTE"}
             </button>
           )}
         </div>
@@ -2006,6 +2644,21 @@ const BudgetsPage = () => {
             options={[
               { value: "arquitetonico", label: formatCategory("arquitetonico") },
               { value: "executivo", label: formatCategory("executivo") },
+            ]}
+          />
+
+          <FormField
+            label="Status"
+            as="select"
+            value={form.status}
+            onChange={(e) => requestStatusChange("create", e.target.value as BudgetStatus)}
+            error={statusFieldError}
+            options={[
+              { value: "draft", label: "Rascunho" },
+              { value: "pre_approved", label: "Pre-aprovado (aplica somente custos aplicaveis)" },
+              { value: "approved", label: "Aprovado (oficial, aplica custos restantes)" },
+              { value: "pending", label: "Pendente (administrativo)" },
+              { value: "rejected", label: "Rejeitado (administrativo)" },
             ]}
           />
 
@@ -2261,13 +2914,74 @@ const BudgetsPage = () => {
             )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Custos aplicaveis</p>
+              <button
+                type="button"
+                onClick={addApplicableCost}
+                className="px-3 py-1 text-[11px] font-bold rounded border border-border hover:bg-secondary transition-colors text-foreground"
+              >
+                Adicionar custo
+              </button>
+            </div>
+
+            {form.applicableCosts.length === 0 ? (
+              <p className="text-xs text-muted-foreground">Nenhum custo aplicavel adicionado.</p>
+            ) : (
+              <div className="space-y-3">
+                {form.applicableCosts.map((cost, index) => (
+                  <div key={`applicable-create-${index}`} className="rounded border border-border p-3 space-y-3 bg-secondary/10">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <FormField
+                        label="Nome"
+                        value={cost.name}
+                        onChange={(event) => updateApplicableCostField(index, "name", event.target.value)}
+                        placeholder="Ex.: Frete especial"
+                        error={applicableCostsFieldErrors[`${index}-name`]}
+                      />
+
+                      <FormField
+                        label="Valor"
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={cost.amount}
+                        onChange={(event) => updateApplicableCostField(index, "amount", Number(event.target.value))}
+                        error={applicableCostsFieldErrors[`${index}-amount`]}
+                      />
+                    </div>
+
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => removeApplicableCost(index)}
+                        className="px-3 py-1 text-[11px] font-bold rounded border border-border text-muted-foreground hover:text-destructive hover:border-destructive/40"
+                      >
+                        Remover custo
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <FormField
+              label="Custo aplicavel (R$)"
+              type="number"
+              min={0}
+              step="0.01"
+              value={form.costsApplicableValue ?? 0}
+              onChange={e => setForm({ ...form, costsApplicableValue: Math.max(0, Number(e.target.value) || 0) })}
+            />
             <FormField label="Mão de Obra (R$)" type="number" step="0.01" value={form.laborCost} onChange={e => setForm({ ...form, laborCost: Number(e.target.value) })} />
             <FormField label="Margem de Lucro (%)" type="number" step="1" value={form.profitMargin * 100} onChange={e => setForm({ ...form, profitMargin: Number(e.target.value) / 100 })} />
           </div>
 
           <div className="border border-border rounded p-4 bg-secondary/20">
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-center">
+            <div className="grid grid-cols-1 sm:grid-cols-5 gap-4 text-center">
               <div>
                 <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Materiais</p>
                 <p className="font-mono font-bold text-foreground">R$ {calc.materialCost.toFixed(2)}</p>
@@ -2275,6 +2989,13 @@ const BudgetsPage = () => {
               <div>
                 <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Deptos. gasto</p>
                 <p className="font-mono font-bold text-foreground">R$ {expenseDepartmentsCost.toFixed(2)}</p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Custos aplic.</p>
+                <p className="font-mono font-bold text-foreground">R$ {costsApplicableValue.toFixed(2)}</p>
+                {applicableCostsListCost > 0 && (
+                  <p className="text-[10px] text-muted-foreground mt-1">Itens: {formatCurrency(applicableCostsListCost)}</p>
+                )}
               </div>
               <div>
                 <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Custo Total</p>
@@ -2303,16 +3024,101 @@ const BudgetsPage = () => {
         </div>
       </Modal>
 
-      {selectedToApprove && (
+      {pendingStatusChange && (
         <Modal
-          open={Boolean(selectedToApprove)}
-          onClose={() => closeApproveModal()}
-          title="Aprovar Orcamento"
+          open={Boolean(pendingStatusChange)}
+          onClose={cancelPreApprovedStatusChange}
+          title="Aplicar custos aplicaveis agora?"
+          width="max-w-lg"
+        >
+          <div className="space-y-4">
+            <p className="text-sm text-foreground/90">
+              Ao pre-aprovar, somente os custos aplicaveis deste orcamento serao aplicados como gasto.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Materiais, departamentos de gasto e mao de obra serao aplicados apenas na aprovacao oficial.
+            </p>
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={cancelPreApprovedStatusChange}
+                className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmPreApprovedStatusChange}
+                className="px-4 py-2 text-sm rounded bg-blue-500 text-white font-medium hover:opacity-90 transition-opacity"
+              >
+                Confirmar pre-aprovacao
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {selectedToPreApprove && (
+        <Modal
+          open={Boolean(selectedToPreApprove)}
+          onClose={closePreApproveModal}
+          title="Pre-aprovar e aplicar custos aplicaveis?"
           width="max-w-xl"
         >
           <div className="space-y-4">
             <p className="text-sm text-foreground/90">
-              Ao aprovar, o backend vai baixar estoque dos produtos usados no orcamento e registrar movimentacoes de saida automaticamente.
+              Ao pre-aprovar, somente os custos aplicaveis serao aplicados agora.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Materiais, departamentos de gasto e mao de obra serao aplicados somente na aprovacao oficial.
+            </p>
+
+            <div className="rounded border border-border bg-secondary/20 px-3 py-2 text-sm space-y-1">
+              <p>
+                <span className="text-muted-foreground">Cliente:</span> {selectedToPreApprove.clientName}
+              </p>
+              <p>
+                <span className="text-muted-foreground">Descricao:</span> {selectedToPreApprove.description}
+              </p>
+              <p>
+                <span className="text-muted-foreground">Custos aplicaveis (agora):</span> {formatCurrency(selectedToPreApprove.costsApplicableValue)}
+              </p>
+              <p>
+                <span className="text-muted-foreground">Custo restante (apos pre-aprovacao):</span> {formatCurrency(selectedToPreApprove.remainingCostToApply)}
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={closePreApproveModal}
+                disabled={preApprovingId === selectedToPreApprove.id}
+                className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => void confirmPreApproveBudget()}
+                disabled={preApprovingId === selectedToPreApprove.id}
+                className="px-4 py-2 text-sm rounded bg-blue-500 text-white font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {preApprovingId === selectedToPreApprove.id ? "Aplicando..." : "Pre-aprovar e aplicar custos aplicaveis"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {selectedToApprove && (
+        <Modal
+          open={Boolean(selectedToApprove)}
+          onClose={() => closeApproveModal()}
+          title="Aprovar oficialmente"
+          width="max-w-xl"
+        >
+          <div className="space-y-4">
+            <p className="text-sm text-foreground/90">
+              Esta acao finaliza o orcamento como aprovado/oficial e aplica os custos restantes (materiais, departamentos de gasto e mao de obra).
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Os custos aplicaveis ja lancados na pre-aprovacao serao mantidos.
             </p>
 
             <div className="rounded border border-border bg-secondary/20 px-3 py-2 text-sm space-y-1">
@@ -2324,6 +3130,9 @@ const BudgetsPage = () => {
               </p>
               <p>
                 <span className="text-muted-foreground">Itens:</span> {selectedToApprove.items.length}
+              </p>
+              <p>
+                <span className="text-muted-foreground">Custo restante para aplicar:</span> {formatCurrency(selectedToApprove.remainingCostToApply)}
               </p>
             </div>
 
@@ -2354,7 +3163,7 @@ const BudgetsPage = () => {
                 disabled={approvingId === selectedToApprove.id}
                 className="px-4 py-2 text-sm rounded bg-success text-success-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                {approvingId === selectedToApprove.id ? "Aprovando..." : "Confirmar Aprovacao"}
+                {approvingId === selectedToApprove.id ? "Aprovando..." : "Confirmar aprovacao oficial"}
               </button>
             </div>
           </div>
@@ -2415,20 +3224,49 @@ const BudgetsPage = () => {
                 label="Status"
                 as="select"
                 value={detailForm.status}
-                onChange={(e) =>
-                  setDetailForm((current) => ({
-                    ...current,
-                    status: e.target.value as BudgetStatus,
-                  }))
-                }
+                onChange={(e) => requestStatusChange("detail", e.target.value as BudgetStatus)}
+                error={detailStatusFieldError}
                 options={[
                   { value: "draft", label: "Rascunho" },
+                  { value: "pre_approved", label: "Pre-aprovado (aplica somente custos aplicaveis)" },
+                  { value: "approved", label: "Aprovado (oficial, aplica custos restantes)" },
                   { value: "pending", label: "Pendente" },
-                  { value: "approved", label: "Aprovado" },
                   { value: "rejected", label: "Rejeitado" },
                 ]}
               />
             </div>
+
+            {selectedBudget && selectedBudget.costsAppliedAt && (
+              <div className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+                Custos aplicaveis ja aplicados em {formatDateTime(selectedBudget.costsAppliedAt)} com base no valor salvo em Custo aplicavel. Alteracoes devem considerar o impacto financeiro ja registrado.
+              </div>
+            )}
+
+            {selectedBudget && (
+              <div className="rounded border border-border bg-secondary/20 p-3">
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-2">
+                  Indicadores de custos aplicados
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+                  <div>
+                    <p className="text-muted-foreground">Custo aplicavel (base)</p>
+                    <p className="font-mono font-bold text-foreground">{formatCurrency(selectedBudget.costsApplicableValue)}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Custos aplicados</p>
+                    <p className="font-mono font-bold text-foreground">{formatCurrency(selectedBudget.costsAppliedValue)}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Data da aplicacao</p>
+                    <p className="font-medium text-foreground">{formatDateTime(selectedBudget.costsAppliedAt)}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Custo restante para aplicar</p>
+                    <p className="font-mono font-bold text-foreground">{formatCurrency(selectedBudget.remainingCostToApply)}</p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <FormField
               label="Descrição"
@@ -2437,12 +3275,26 @@ const BudgetsPage = () => {
               onChange={(e) => setDetailForm((current) => ({ ...current, description: e.target.value }))}
             />
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <FormField
                 label="Entrega"
                 type="date"
                 value={detailForm.deliveryDate}
                 onChange={(e) => setDetailForm((current) => ({ ...current, deliveryDate: e.target.value }))}
+              />
+
+              <FormField
+                label="Custo aplicavel (R$)"
+                type="number"
+                min={0}
+                step="0.01"
+                value={detailForm.costsApplicableValue ?? 0}
+                onChange={(e) =>
+                  setDetailForm((current) => ({
+                    ...current,
+                    costsApplicableValue: Math.max(0, Number(e.target.value) || 0),
+                  }))
+                }
               />
 
               <FormField
@@ -2674,8 +3526,63 @@ const BudgetsPage = () => {
                   )}
                 </div>
 
+                <div className="mt-6">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Custos aplicaveis</p>
+                    <button
+                      type="button"
+                      onClick={addDetailApplicableCost}
+                      className="px-3 py-1 text-[11px] font-bold rounded border border-border hover:bg-secondary transition-colors text-foreground"
+                    >
+                      Adicionar custo
+                    </button>
+                  </div>
+
+                  {detailForm.applicableCosts.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">Nenhum custo aplicavel adicionado.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {detailForm.applicableCosts.map((cost, index) => (
+                        <div key={`applicable-detail-${index}`} className="rounded border border-border p-3 space-y-3 bg-secondary/10">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <FormField
+                              label="Nome"
+                              value={cost.name}
+                              onChange={(event) => updateDetailApplicableCostField(index, "name", event.target.value)}
+                              placeholder="Ex.: Frete especial"
+                              error={detailApplicableCostsFieldErrors[`${index}-name`]}
+                            />
+
+                            <FormField
+                              label="Valor"
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              value={cost.amount}
+                              onChange={(event) =>
+                                updateDetailApplicableCostField(index, "amount", Number(event.target.value))
+                              }
+                              error={detailApplicableCostsFieldErrors[`${index}-amount`]}
+                            />
+                          </div>
+
+                          <div className="flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => removeDetailApplicableCost(index)}
+                              className="px-3 py-1 text-[11px] font-bold rounded border border-border text-muted-foreground hover:text-destructive hover:border-destructive/40"
+                            >
+                              Remover custo
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 <div className="mt-6 border border-border rounded p-4 bg-secondary/20">
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-center">
+                  <div className="grid grid-cols-1 sm:grid-cols-5 gap-4 text-center">
                     <div>
                       <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Materiais</p>
                       <p className="font-mono font-bold text-foreground">{formatCurrency(detailMaterialCost)}</p>
@@ -2683,6 +3590,10 @@ const BudgetsPage = () => {
                     <div>
                       <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Deptos. gasto</p>
                       <p className="font-mono font-bold text-foreground">{formatCurrency(detailExpenseDepartmentsCost)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Custos aplic.</p>
+                      <p className="font-mono font-bold text-foreground">{formatCurrency(detailApplicableCostsCost)}</p>
                     </div>
                     <div>
                       <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Custo total</p>
@@ -2705,6 +3616,26 @@ const BudgetsPage = () => {
             />
 
             <div className="flex justify-end gap-3">
+              {selectedBudget && (selectedBudget.status === "draft" || selectedBudget.status === "pending") && (
+                <button
+                  onClick={() => openPreApproveModal(selectedBudget)}
+                  disabled={Boolean(preApprovingId) || isUpdatingDetail || isLoadingDetail}
+                  className="px-4 py-2 text-sm rounded bg-blue-500 text-white font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {preApprovingId === selectedBudget.id ? "Aplicando custos..." : "Pre-aprovar e aplicar custos aplicaveis"}
+                </button>
+              )}
+
+              {selectedBudget && selectedBudget.status === "pre_approved" && (
+                <button
+                  onClick={() => openApproveModal(selectedBudget)}
+                  disabled={Boolean(approvingId) || isUpdatingDetail || isLoadingDetail}
+                  className="px-4 py-2 text-sm rounded bg-success text-success-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {approvingId === selectedBudget.id ? "Aprovando..." : "Aprovar oficialmente"}
+                </button>
+              )}
+
               <button
                 onClick={closeDetailModal}
                 className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground"

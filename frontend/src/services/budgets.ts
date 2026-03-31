@@ -1,6 +1,6 @@
 import { ApiError, parseCollection, request, toNullableString } from "@/services/api";
 
-export type BudgetStatus = "draft" | "pending" | "approved" | "rejected";
+export type BudgetStatus = "draft" | "pending" | "pre_approved" | "approved" | "rejected";
 export type BudgetCategory = "arquitetonico" | "executivo";
 
 export interface BudgetMaterial {
@@ -18,6 +18,12 @@ export interface BudgetExpenseDepartment {
   amount: number;
 }
 
+export interface BudgetApplicableCost {
+  applicableCostId?: string;
+  name: string;
+  amount: number;
+}
+
 export interface ExpenseDepartmentCatalogItem {
   id: string;
   name: string;
@@ -28,7 +34,12 @@ export interface ExpenseDepartmentCatalogItem {
 }
 
 export interface BudgetFinancialSummary {
+  costsApplicableValue?: number;
   expenseDepartmentsCost?: number;
+  applicableCostsCost?: number;
+  costsAppliedAt?: string | null;
+  costsAppliedValue?: number;
+  remainingCostToApply?: number;
 }
 
 export interface Budget {
@@ -45,10 +56,14 @@ export interface Budget {
   profitValue?: number;
   notes: string | null;
   approvedAt: string | null;
+  costsApplicableValue?: number;
+  costsAppliedAt?: string | null;
+  costsAppliedValue?: number;
   createdAt: string;
   updatedAt: string;
   materials: BudgetMaterial[];
   expenseDepartments: BudgetExpenseDepartment[];
+  applicableCosts: BudgetApplicableCost[];
   financialSummary?: BudgetFinancialSummary;
 }
 
@@ -58,10 +73,12 @@ export interface CreateBudgetInput {
   description: string;
   deliveryDate: string | null;
   totalPrice: number;
+  costsApplicableValue?: number;
   notes: string | null;
   status: BudgetStatus;
   materials: BudgetMaterial[];
   expenseDepartments?: BudgetExpenseDepartment[];
+  applicableCosts?: BudgetApplicableCost[];
 }
 
 export type UpdateBudgetInput = Partial<CreateBudgetInput>;
@@ -241,6 +258,7 @@ const normalizeStatus = (value: unknown): BudgetStatus => {
   switch (value) {
     case "draft":
     case "pending":
+    case "pre_approved":
     case "approved":
     case "rejected":
       return value;
@@ -310,6 +328,31 @@ const normalizeBudgetExpenseDepartment = (value: unknown): BudgetExpenseDepartme
   };
 };
 
+const normalizeBudgetApplicableCost = (value: unknown): BudgetApplicableCost | null => {
+  const item = toRecord(value);
+
+  if (!item) {
+    return null;
+  }
+
+  const name = toStringSafe(item.name, "").trim();
+
+  if (!name) {
+    return null;
+  }
+
+  const applicableCostId = toStringSafe(
+    item.applicableCostId ?? item.applicable_cost_id,
+    "",
+  );
+
+  return {
+    applicableCostId: applicableCostId || undefined,
+    name,
+    amount: Math.max(0, toNumberSafe(item.amount, 0)),
+  };
+};
+
 const normalizeExpenseDepartmentCatalogItem = (value: unknown): ExpenseDepartmentCatalogItem | null => {
   const item = toRecord(value);
 
@@ -354,6 +397,11 @@ const normalizeBudget = (value: unknown): Budget | null => {
       ? (item.expenseDepartments ?? item.expense_departments)
       : []
   ) as unknown[];
+  const rawApplicableCosts = (
+    Array.isArray(item.applicableCosts ?? item.applicable_costs)
+      ? (item.applicableCosts ?? item.applicable_costs)
+      : []
+  ) as unknown[];
   const financialSummary = toRecord(item.financialSummary ?? item.financial_summary);
   const totalCost = toOptionalNumber(item.totalCost ?? item.total_cost ?? item.cost ?? item.cost_price);
   const laborCost = toOptionalNumber(item.laborCost ?? item.labor_cost);
@@ -396,6 +444,11 @@ const normalizeBudget = (value: unknown): Budget | null => {
     profitValue,
     notes: toNullableString(toStringSafe(item.notes, "")),
     approvedAt: toNullableIsoString(item.approvedAt ?? item.approved_at),
+    costsApplicableValue: toOptionalNumber(
+      item.costsApplicableValue ?? item.costs_applicable_value,
+    ),
+    costsAppliedAt: toNullableIsoString(item.costsAppliedAt ?? item.costs_applied_at),
+    costsAppliedValue: toOptionalNumber(item.costsAppliedValue ?? item.costs_applied_value),
     createdAt: toStringSafe(item.createdAt ?? item.created_at, ""),
     updatedAt: toStringSafe(item.updatedAt ?? item.updated_at, ""),
     materials: rawMaterials
@@ -404,11 +457,30 @@ const normalizeBudget = (value: unknown): Budget | null => {
     expenseDepartments: rawExpenseDepartments
       .map(normalizeBudgetExpenseDepartment)
       .filter((department): department is BudgetExpenseDepartment => Boolean(department)),
+    applicableCosts: rawApplicableCosts
+      .map(normalizeBudgetApplicableCost)
+      .filter((cost): cost is BudgetApplicableCost => Boolean(cost)),
     financialSummary: financialSummary
       ? {
+          costsApplicableValue: toOptionalNumber(
+            financialSummary.costsApplicableValue ?? financialSummary.costs_applicable_value,
+          ),
           expenseDepartmentsCost: toOptionalNumber(
             financialSummary.expenseDepartmentsCost ??
               financialSummary.expense_departments_cost,
+          ),
+          applicableCostsCost: toOptionalNumber(
+            financialSummary.applicableCostsCost ??
+              financialSummary.applicable_costs_cost,
+          ),
+          costsAppliedAt: toNullableIsoString(
+            financialSummary.costsAppliedAt ?? financialSummary.costs_applied_at,
+          ),
+          costsAppliedValue: toOptionalNumber(
+            financialSummary.costsAppliedValue ?? financialSummary.costs_applied_value,
+          ),
+          remainingCostToApply: toOptionalNumber(
+            financialSummary.remainingCostToApply ?? financialSummary.remaining_cost_to_apply,
           ),
         }
       : undefined,
@@ -462,6 +534,10 @@ const toBudgetPayload = (input: CreateBudgetInput | UpdateBudgetInput, partial =
     payload.totalPrice = toNumberSafe(input.totalPrice, 0);
   }
 
+  if (!partial || input.costsApplicableValue !== undefined) {
+    payload.costsApplicableValue = Math.max(0, toNumberSafe(input.costsApplicableValue, 0));
+  }
+
   if (!partial || input.notes !== undefined) {
     payload.notes = toNullableString(input.notes);
   }
@@ -486,6 +562,14 @@ const toBudgetPayload = (input: CreateBudgetInput | UpdateBudgetInput, partial =
       name: toStringSafe(department.name, "").trim(),
       sector: toStringSafe(department.sector, "").trim(),
       amount: Math.max(0, toNumberSafe(department.amount, 0)),
+    }));
+  }
+
+  if (!partial || input.applicableCosts !== undefined) {
+    payload.applicableCosts = (input.applicableCosts || []).map((cost) => ({
+      applicableCostId: toNullableString(cost.applicableCostId),
+      name: toStringSafe(cost.name, "").trim(),
+      amount: Math.max(0, toNumberSafe(cost.amount, 0)),
     }));
   }
 

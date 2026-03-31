@@ -1,6 +1,7 @@
 const statusStyles: Record<string, string> = {
   draft: "bg-muted text-muted-foreground",
   pending: "bg-amber-500/20 text-amber-300",
+  pre_approved: "bg-blue-500/20 text-blue-300",
   sent: "bg-primary/20 text-primary",
   approved: "bg-success/20 text-success",
   rejected: "bg-destructive/20 text-destructive",
@@ -18,6 +19,7 @@ const statusStyles: Record<string, string> = {
 const statusLabels: Record<string, string> = {
   draft: "Rascunho",
   pending: "Pendente",
+  pre_approved: "Pre-aprovado",
   sent: "Enviado",
   approved: "Aprovado",
   rejected: "Rejeitado",
