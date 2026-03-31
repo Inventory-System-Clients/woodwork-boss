@@ -11,6 +11,26 @@ export interface BudgetMaterial {
   unitPrice: number;
 }
 
+export interface BudgetExpenseDepartment {
+  expenseDepartmentId?: string;
+  name: string;
+  sector: string;
+  amount: number;
+}
+
+export interface ExpenseDepartmentCatalogItem {
+  id: string;
+  name: string;
+  sector: string;
+  defaultAmount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BudgetFinancialSummary {
+  expenseDepartmentsCost?: number;
+}
+
 export interface Budget {
   id: string;
   clientName: string;
@@ -28,6 +48,8 @@ export interface Budget {
   createdAt: string;
   updatedAt: string;
   materials: BudgetMaterial[];
+  expenseDepartments: BudgetExpenseDepartment[];
+  financialSummary?: BudgetFinancialSummary;
 }
 
 export interface CreateBudgetInput {
@@ -39,6 +61,7 @@ export interface CreateBudgetInput {
   notes: string | null;
   status: BudgetStatus;
   materials: BudgetMaterial[];
+  expenseDepartments?: BudgetExpenseDepartment[];
 }
 
 export type UpdateBudgetInput = Partial<CreateBudgetInput>;
@@ -260,6 +283,58 @@ const normalizeBudgetMaterial = (value: unknown): BudgetMaterial | null => {
   };
 };
 
+const normalizeBudgetExpenseDepartment = (value: unknown): BudgetExpenseDepartment | null => {
+  const item = toRecord(value);
+
+  if (!item) {
+    return null;
+  }
+
+  const name = toStringSafe(item.name, "").trim();
+  const sector = toStringSafe(item.sector, "").trim();
+
+  if (!name || !sector) {
+    return null;
+  }
+
+  const expenseDepartmentId = toStringSafe(
+    item.expenseDepartmentId ?? item.expense_department_id,
+    "",
+  );
+
+  return {
+    expenseDepartmentId: expenseDepartmentId || undefined,
+    name,
+    sector,
+    amount: Math.max(0, toNumberSafe(item.amount, 0)),
+  };
+};
+
+const normalizeExpenseDepartmentCatalogItem = (value: unknown): ExpenseDepartmentCatalogItem | null => {
+  const item = toRecord(value);
+
+  if (!item) {
+    return null;
+  }
+
+  const id = toStringSafe(item.id, "");
+  const name = toStringSafe(item.name, "").trim();
+  const sector = toStringSafe(item.sector, "").trim();
+
+  if (!id || !name || !sector) {
+    return null;
+  }
+
+  return {
+    id,
+    name,
+    sector,
+    defaultAmount: Math.max(0, toNumberSafe(item.defaultAmount ?? item.default_amount, 0)),
+    createdAt: toStringSafe(item.createdAt ?? item.created_at, ""),
+    updatedAt: toStringSafe(item.updatedAt ?? item.updated_at, ""),
+  };
+};
+
 const normalizeBudget = (value: unknown): Budget | null => {
   const item = toRecord(value);
 
@@ -274,6 +349,12 @@ const normalizeBudget = (value: unknown): Budget | null => {
   }
 
   const rawMaterials = Array.isArray(item.materials) ? item.materials : [];
+  const rawExpenseDepartments = (
+    Array.isArray(item.expenseDepartments ?? item.expense_departments)
+      ? (item.expenseDepartments ?? item.expense_departments)
+      : []
+  ) as unknown[];
+  const financialSummary = toRecord(item.financialSummary ?? item.financial_summary);
   const totalCost = toOptionalNumber(item.totalCost ?? item.total_cost ?? item.cost ?? item.cost_price);
   const laborCost = toOptionalNumber(item.laborCost ?? item.labor_cost);
   const profitMargin =
@@ -320,6 +401,17 @@ const normalizeBudget = (value: unknown): Budget | null => {
     materials: rawMaterials
       .map(normalizeBudgetMaterial)
       .filter((material): material is BudgetMaterial => Boolean(material)),
+    expenseDepartments: rawExpenseDepartments
+      .map(normalizeBudgetExpenseDepartment)
+      .filter((department): department is BudgetExpenseDepartment => Boolean(department)),
+    financialSummary: financialSummary
+      ? {
+          expenseDepartmentsCost: toOptionalNumber(
+            financialSummary.expenseDepartmentsCost ??
+              financialSummary.expense_departments_cost,
+          ),
+        }
+      : undefined,
   };
 };
 
@@ -388,6 +480,15 @@ const toBudgetPayload = (input: CreateBudgetInput | UpdateBudgetInput, partial =
     }));
   }
 
+  if (!partial || input.expenseDepartments !== undefined) {
+    payload.expenseDepartments = (input.expenseDepartments || []).map((department) => ({
+      expenseDepartmentId: toNullableString(department.expenseDepartmentId),
+      name: toStringSafe(department.name, "").trim(),
+      sector: toStringSafe(department.sector, "").trim(),
+      amount: Math.max(0, toNumberSafe(department.amount, 0)),
+    }));
+  }
+
   return payload;
 };
 
@@ -417,6 +518,23 @@ export const listBudgets = async (category?: BudgetCategory) => {
 export const getBudgetById = async (id: string) => {
   const payload = await request<unknown>(`/budgets/${id}`);
   return ensureBudget(payload, "Não foi possível carregar os detalhes do orçamento.");
+};
+
+export const listExpenseDepartments = async (search?: string) => {
+  const normalizedSearch = toStringSafe(search, "").trim();
+  const query = normalizedSearch ? `?search=${encodeURIComponent(normalizedSearch)}` : "";
+  const payload = await request<unknown>(`/budgets/expense-departments${query}`);
+  const unwrapped = unwrapDataEnvelope(payload);
+
+  if (Array.isArray(unwrapped)) {
+    return unwrapped
+      .map(normalizeExpenseDepartmentCatalogItem)
+      .filter((item): item is ExpenseDepartmentCatalogItem => Boolean(item));
+  }
+
+  return parseCollection<unknown>(payload)
+    .map(normalizeExpenseDepartmentCatalogItem)
+    .filter((item): item is ExpenseDepartmentCatalogItem => Boolean(item));
 };
 
 export const createBudget = async (input: CreateBudgetInput) => {

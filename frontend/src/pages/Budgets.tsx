@@ -11,10 +11,13 @@ import {
   ApproveBudgetError,
   ApproveBudgetStockDetail,
   approveBudget,
+  type BudgetExpenseDepartment as ApiBudgetExpenseDepartment,
   createBudget,
+  type ExpenseDepartmentCatalogItem,
   formatApproveBudgetDetailMessage,
   getBudgetById,
   listBudgets,
+  listExpenseDepartments,
   updateBudget,
   type Budget as ApiBudget,
   type BudgetCategory,
@@ -127,6 +130,13 @@ interface BudgetItemRow {
   subtotal: number;
 }
 
+interface BudgetExpenseDepartmentRow {
+  expenseDepartmentId?: string;
+  name: string;
+  sector: string;
+  amount: number;
+}
+
 interface BudgetRow {
   id: string;
   clientId: string;
@@ -140,7 +150,9 @@ interface BudgetRow {
   createdAt: string;
   updatedAt: string;
   items: BudgetItemRow[];
+  expenseDepartments: BudgetExpenseDepartmentRow[];
   materialCost: number;
+  expenseDepartmentsCost: number;
   laborCost: number;
   totalCost: number;
   profitMargin: number;
@@ -218,6 +230,67 @@ const normalizeBudgetError = (error: unknown, fallback: string) => {
   return fallback;
 };
 
+const extractExpenseDepartmentsFieldErrors = (error: unknown) => {
+  if (!(error instanceof ApiError) || error.status !== 400) {
+    return {} as Record<string, string>;
+  }
+
+  const payload = error.payload;
+
+  if (!payload || typeof payload !== "object") {
+    return {} as Record<string, string>;
+  }
+
+  const output: Record<string, string> = {};
+  const candidates: Array<{ path?: string; message?: string }> = [];
+
+  const record = payload as Record<string, unknown>;
+
+  const collectCandidate = (value: unknown) => {
+    if (!value || typeof value !== "object") {
+      return;
+    }
+
+    const item = value as Record<string, unknown>;
+    candidates.push({
+      path: typeof item.path === "string" ? item.path : typeof item.field === "string" ? item.field : undefined,
+      message:
+        typeof item.message === "string"
+          ? item.message
+          : typeof item.msg === "string"
+            ? item.msg
+            : undefined,
+    });
+  };
+
+  if (Array.isArray(record.errors)) {
+    record.errors.forEach(collectCandidate);
+  }
+
+  if (Array.isArray(record.details)) {
+    record.details.forEach(collectCandidate);
+  }
+
+  const expensePathRegex = /expense(?:_|)departments?\[(\d+)\]\.(name|sector|amount)/i;
+
+  candidates.forEach((candidate) => {
+    if (!candidate.path) {
+      return;
+    }
+
+    const match = candidate.path.match(expensePathRegex);
+
+    if (!match) {
+      return;
+    }
+
+    const [, index, field] = match;
+    output[`${index}-${field.toLowerCase()}`] = candidate.message || "Campo invalido.";
+  });
+
+  return output;
+};
+
 const mapBudgetItemFromApi = (item: ApiBudgetMaterial): BudgetItemRow => ({
   productId: item.productId || undefined,
   productName: item.productName,
@@ -225,6 +298,15 @@ const mapBudgetItemFromApi = (item: ApiBudgetMaterial): BudgetItemRow => ({
   unit: item.unit || "unidade",
   unitPrice: Number(item.unitPrice) || 0,
   subtotal: (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0),
+});
+
+const mapBudgetExpenseDepartmentFromApi = (
+  department: ApiBudgetExpenseDepartment,
+): BudgetExpenseDepartmentRow => ({
+  expenseDepartmentId: department.expenseDepartmentId || undefined,
+  name: department.name,
+  sector: department.sector,
+  amount: Math.max(0, Number(department.amount) || 0),
 });
 
 const createEmptyMaterialInput = (mode: MaterialInputMode = "existing") => ({
@@ -235,6 +317,16 @@ const createEmptyMaterialInput = (mode: MaterialInputMode = "existing") => ({
   unit: "unidade",
   unitPrice: 0,
 });
+
+const createEmptyExpenseDepartment = (): BudgetExpenseDepartmentRow => ({
+  expenseDepartmentId: undefined,
+  name: "",
+  sector: "",
+  amount: 0,
+});
+
+const formatExpenseDepartmentSuggestion = (department: ExpenseDepartmentCatalogItem) =>
+  `${department.name} - ${department.sector} (${formatCurrency(department.defaultAmount)})`;
 
 const getStockBadge = (stockQuantity: number) => {
   if (stockQuantity <= 0) {
@@ -252,14 +344,20 @@ const getStockBadge = (stockQuantity: number) => {
 
 const mapBudgetFromApi = (budget: ApiBudget, clientsCatalog: Client[] = []): BudgetRow => {
   const items = budget.materials.map(mapBudgetItemFromApi);
+  const expenseDepartments = budget.expenseDepartments.map(mapBudgetExpenseDepartmentFromApi);
   const materialCost = items.reduce((sum, item) => sum + item.subtotal, 0);
+  const expenseDepartmentsCost = Number.isFinite(Number(budget.financialSummary?.expenseDepartmentsCost))
+    ? Math.max(0, Number(budget.financialSummary?.expenseDepartmentsCost))
+    : expenseDepartments.reduce((sum, department) => sum + department.amount, 0);
   const apiTotalCost = Number(budget.totalCost);
   const apiLaborCost = Number(budget.laborCost);
   const finalPrice = Number(budget.totalPrice) || 0;
   const laborCost = Number.isFinite(apiLaborCost)
     ? Math.max(0, apiLaborCost)
     : Math.max(0, Number.isFinite(apiTotalCost) ? apiTotalCost - materialCost : 0);
-  const totalCost = Number.isFinite(apiTotalCost) ? Math.max(0, apiTotalCost) : materialCost + laborCost;
+  const totalCost = Number.isFinite(apiTotalCost)
+    ? Math.max(0, apiTotalCost)
+    : materialCost + laborCost + expenseDepartmentsCost;
   const profitMargin = totalCost > 0 ? Math.max(0, (finalPrice - totalCost) / totalCost) : 0;
 
   const linkedClient = findClientByName(clientsCatalog, budget.clientName);
@@ -277,7 +375,9 @@ const mapBudgetFromApi = (budget: ApiBudget, clientsCatalog: Client[] = []): Bud
     createdAt: normalizeDateOnly(budget.createdAt),
     updatedAt: normalizeDateOnly(budget.updatedAt),
     items,
+    expenseDepartments,
     materialCost,
+    expenseDepartmentsCost,
     laborCost,
     totalCost,
     profitMargin,
@@ -403,6 +503,7 @@ const createInitialBudgetForm = () => ({
   laborCost: 0,
   profitMargin: 0.35,
   items: [] as BudgetItemRow[],
+  expenseDepartments: [] as BudgetExpenseDepartmentRow[],
 });
 
 const createInitialDetailForm = () => ({
@@ -414,6 +515,7 @@ const createInitialDetailForm = () => ({
   status: "draft" as BudgetStatus,
   totalPrice: 0,
   items: [] as BudgetItemRow[],
+  expenseDepartments: [] as BudgetExpenseDepartmentRow[],
 });
 
 const BudgetsPage = () => {
@@ -437,6 +539,13 @@ const BudgetsPage = () => {
   const [productsCatalog, setProductsCatalog] = useState<Product[]>([]);
   const [isLoadingProducts, setIsLoadingProducts] = useState(false);
   const [productsError, setProductsError] = useState("");
+  const [expenseDepartmentsCatalog, setExpenseDepartmentsCatalog] = useState<ExpenseDepartmentCatalogItem[]>([]);
+  const [isLoadingExpenseDepartmentsCatalog, setIsLoadingExpenseDepartmentsCatalog] = useState(false);
+  const [expenseDepartmentsCatalogError, setExpenseDepartmentsCatalogError] = useState("");
+  const [expenseDepartmentsSearch, setExpenseDepartmentsSearch] = useState("");
+  const [detailExpenseDepartmentsSearch, setDetailExpenseDepartmentsSearch] = useState("");
+  const [expenseDepartmentsFieldErrors, setExpenseDepartmentsFieldErrors] = useState<Record<string, string>>({});
+  const [detailExpenseDepartmentsFieldErrors, setDetailExpenseDepartmentsFieldErrors] = useState<Record<string, string>>({});
   const [selectedToApprove, setSelectedToApprove] = useState<BudgetRow | null>(null);
   const [approvalError, setApprovalError] = useState("");
   const [approvalDetails, setApprovalDetails] = useState<ApproveBudgetStockDetail[]>([]);
@@ -544,12 +653,56 @@ const BudgetsPage = () => {
     }
   };
 
+  const loadExpenseDepartmentsCatalog = async (search = "") => {
+    setIsLoadingExpenseDepartmentsCatalog(true);
+    setExpenseDepartmentsCatalogError("");
+
+    try {
+      const departments = await listExpenseDepartments(search);
+      setExpenseDepartmentsCatalog(departments);
+    } catch (error) {
+      setExpenseDepartmentsCatalog([]);
+      setExpenseDepartmentsCatalogError(
+        normalizeBudgetError(error, "Nao foi possivel carregar departamentos de gasto."),
+      );
+    } finally {
+      setIsLoadingExpenseDepartmentsCatalog(false);
+    }
+  };
+
   const openCreateModal = () => {
     setModal(true);
     setFormError("");
+    setExpenseDepartmentsFieldErrors({});
+    setExpenseDepartmentsSearch("");
     void loadClientsForForms();
     void loadProductsForForm();
+    void loadExpenseDepartmentsCatalog();
   };
+
+  useEffect(() => {
+    if (!modal) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void loadExpenseDepartmentsCatalog(expenseDepartmentsSearch);
+    }, 300);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [expenseDepartmentsSearch, modal]);
+
+  useEffect(() => {
+    if (!detailModalOpen) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void loadExpenseDepartmentsCatalog(detailExpenseDepartmentsSearch);
+    }, 300);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [detailExpenseDepartmentsSearch, detailModalOpen]);
 
   const clearApprovalFeedback = () => {
     setApprovalError("");
@@ -678,6 +831,240 @@ const BudgetsPage = () => {
     setForm((current) => ({ ...current, items: current.items.filter((_, i) => i !== idx) }));
   };
 
+  const addExpenseDepartment = () => {
+    setForm((current) => ({
+      ...current,
+      expenseDepartments: [...current.expenseDepartments, createEmptyExpenseDepartment()],
+    }));
+  };
+
+  const addDetailExpenseDepartment = () => {
+    if (!selectedBudget) {
+      return;
+    }
+
+    const nextDepartments = [...selectedBudget.expenseDepartments, createEmptyExpenseDepartment()];
+
+    setSelectedBudget((current) =>
+      current
+        ? {
+            ...current,
+            expenseDepartments: nextDepartments,
+          }
+        : current,
+    );
+    setDetailForm((current) => ({ ...current, expenseDepartments: nextDepartments }));
+  };
+
+  const removeExpenseDepartment = (index: number) => {
+    setForm((current) => ({
+      ...current,
+      expenseDepartments: current.expenseDepartments.filter((_, departmentIndex) => departmentIndex !== index),
+    }));
+    setExpenseDepartmentsFieldErrors((current) => {
+      const nextEntries = Object.entries(current).filter(
+        ([key]) => !key.startsWith(`${index}-`),
+      );
+      return Object.fromEntries(nextEntries);
+    });
+  };
+
+  const removeDetailExpenseDepartment = (index: number) => {
+    setSelectedBudget((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const nextDepartments = current.expenseDepartments.filter(
+        (_, departmentIndex) => departmentIndex !== index,
+      );
+
+      setDetailForm((detailCurrent) => ({ ...detailCurrent, expenseDepartments: nextDepartments }));
+
+      return {
+        ...current,
+        expenseDepartments: nextDepartments,
+      };
+    });
+
+    setDetailExpenseDepartmentsFieldErrors((current) => {
+      const nextEntries = Object.entries(current).filter(
+        ([key]) => !key.startsWith(`${index}-`),
+      );
+      return Object.fromEntries(nextEntries);
+    });
+  };
+
+  const updateExpenseDepartmentField = (
+    index: number,
+    field: keyof BudgetExpenseDepartmentRow,
+    value: string | number,
+  ) => {
+    setForm((current) => ({
+      ...current,
+      expenseDepartments: current.expenseDepartments.map((department, departmentIndex) => {
+        if (departmentIndex !== index) {
+          return department;
+        }
+
+        if (field === "amount") {
+          return {
+            ...department,
+            amount: Math.max(0, Number(value) || 0),
+          };
+        }
+
+        if (field === "expenseDepartmentId") {
+          return {
+            ...department,
+            expenseDepartmentId: typeof value === "string" && value ? value : undefined,
+          };
+        }
+
+        return {
+          ...department,
+          [field]: typeof value === "string" ? value : String(value),
+        };
+      }),
+    }));
+
+    setExpenseDepartmentsFieldErrors((current) => {
+      if (!current[`${index}-${field}`]) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[`${index}-${field}`];
+      return next;
+    });
+  };
+
+  const updateDetailExpenseDepartmentField = (
+    index: number,
+    field: keyof BudgetExpenseDepartmentRow,
+    value: string | number,
+  ) => {
+    if (!selectedBudget) {
+      return;
+    }
+
+    const nextDepartments = selectedBudget.expenseDepartments.map((department, departmentIndex) => {
+      if (departmentIndex !== index) {
+        return department;
+      }
+
+      if (field === "amount") {
+        return {
+          ...department,
+          amount: Math.max(0, Number(value) || 0),
+        };
+      }
+
+      if (field === "expenseDepartmentId") {
+        return {
+          ...department,
+          expenseDepartmentId: typeof value === "string" && value ? value : undefined,
+        };
+      }
+
+      return {
+        ...department,
+        [field]: typeof value === "string" ? value : String(value),
+      };
+    });
+
+    setSelectedBudget((current) =>
+      current
+        ? {
+            ...current,
+            expenseDepartments: nextDepartments,
+          }
+        : current,
+    );
+    setDetailForm((current) => ({ ...current, expenseDepartments: nextDepartments }));
+
+    setDetailExpenseDepartmentsFieldErrors((current) => {
+      if (!current[`${index}-${field}`]) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[`${index}-${field}`];
+      return next;
+    });
+  };
+
+  const applyCatalogToExpenseDepartment = (index: number, catalogId: string) => {
+    const selectedCatalog = expenseDepartmentsCatalog.find((department) => department.id === catalogId);
+
+    if (!selectedCatalog) {
+      return;
+    }
+
+    setForm((current) => ({
+      ...current,
+      expenseDepartments: current.expenseDepartments.map((department, departmentIndex) =>
+        departmentIndex === index
+          ? {
+              expenseDepartmentId: selectedCatalog.id,
+              name: selectedCatalog.name,
+              sector: selectedCatalog.sector,
+              amount: selectedCatalog.defaultAmount,
+            }
+          : department,
+      ),
+    }));
+  };
+
+  const applyCatalogToDetailExpenseDepartment = (index: number, catalogId: string) => {
+    const selectedCatalog = expenseDepartmentsCatalog.find((department) => department.id === catalogId);
+
+    if (!selectedCatalog || !selectedBudget) {
+      return;
+    }
+
+    const nextDepartments = selectedBudget.expenseDepartments.map((department, departmentIndex) =>
+      departmentIndex === index
+        ? {
+            expenseDepartmentId: selectedCatalog.id,
+            name: selectedCatalog.name,
+            sector: selectedCatalog.sector,
+            amount: selectedCatalog.defaultAmount,
+          }
+        : department,
+    );
+
+    setSelectedBudget((current) =>
+      current
+        ? {
+            ...current,
+            expenseDepartments: nextDepartments,
+          }
+        : current,
+    );
+    setDetailForm((current) => ({ ...current, expenseDepartments: nextDepartments }));
+  };
+
+  const validateExpenseDepartments = (departments: BudgetExpenseDepartmentRow[]) => {
+    const errors: Record<string, string> = {};
+
+    departments.forEach((department, index) => {
+      if (!department.name.trim()) {
+        errors[`${index}-name`] = "Nome obrigatorio.";
+      }
+
+      if (!department.sector.trim()) {
+        errors[`${index}-sector`] = "Setor obrigatorio.";
+      }
+
+      if (!Number.isFinite(department.amount) || department.amount < 0) {
+        errors[`${index}-amount`] = "Valor deve ser maior ou igual a zero.";
+      }
+    });
+
+    return errors;
+  };
+
   const calc = calculateBudget(
     form.items.map((item) => ({
       ...item,
@@ -687,11 +1074,37 @@ const BudgetsPage = () => {
     form.profitMargin,
   );
 
+  const expenseDepartmentsCost = form.expenseDepartments.reduce(
+    (sum, department) => sum + (Number(department.amount) || 0),
+    0,
+  );
+
+  const totalCostWithExpenses = calc.materialCost + form.laborCost + expenseDepartmentsCost;
+  const finalPriceWithExpenses = totalCostWithExpenses * (1 + form.profitMargin);
+
+  const detailMaterialCost = (selectedBudget?.items || []).reduce(
+    (sum, item) => sum + (Number(item.subtotal) || 0),
+    0,
+  );
+
+  const detailExpenseDepartmentsCost = detailForm.expenseDepartments.reduce(
+    (sum, department) => sum + (Number(department.amount) || 0),
+    0,
+  );
+
+  const detailLaborCost = Math.max(0, Number(selectedBudget?.laborCost) || 0);
+  const detailProfitMargin = Math.max(0, Number(selectedBudget?.profitMargin) || 0);
+  const detailTotalCostWithExpenses = detailMaterialCost + detailLaborCost + detailExpenseDepartmentsCost;
+  const detailFinalPriceWithExpenses = detailTotalCostWithExpenses * (1 + detailProfitMargin);
+
   const closeCreateModal = () => {
     setModal(false);
     setFormError("");
     setForm(createInitialBudgetForm());
     setProductsError("");
+    setExpenseDepartmentsCatalogError("");
+    setExpenseDepartmentsSearch("");
+    setExpenseDepartmentsFieldErrors({});
     setNewItem(createEmptyMaterialInput());
   };
 
@@ -718,8 +1131,17 @@ const BudgetsPage = () => {
       return;
     }
 
+    const departmentErrors = validateExpenseDepartments(form.expenseDepartments);
+
+    if (Object.keys(departmentErrors).length > 0) {
+      setExpenseDepartmentsFieldErrors(departmentErrors);
+      setFormError("Revise os campos obrigatorios em departamentos de gasto.");
+      return;
+    }
+
     setIsSaving(true);
     setFormError("");
+    setExpenseDepartmentsFieldErrors({});
 
     try {
       const created = await createBudget({
@@ -727,7 +1149,7 @@ const BudgetsPage = () => {
         category: form.category,
         description: form.description.trim(),
         deliveryDate: form.deliveryDate ? new Date(`${form.deliveryDate}T00:00:00`).toISOString() : null,
-        totalPrice: calc.finalPrice,
+        totalPrice: finalPriceWithExpenses,
         notes: form.notes.trim() ? form.notes.trim() : null,
         status: "draft",
         materials: form.items.map((item) => {
@@ -747,12 +1169,24 @@ const BudgetsPage = () => {
 
           return payloadItem;
         }),
+        expenseDepartments: form.expenseDepartments.map((department) => ({
+          expenseDepartmentId: department.expenseDepartmentId,
+          name: department.name.trim(),
+          sector: department.sector.trim(),
+          amount: Math.max(0, Number(department.amount) || 0),
+        })),
       });
 
       setData((current) => [mapBudgetFromApi(created, clientsCatalog), ...current]);
       await Promise.all([loadBudgetsFromApi(), loadProductsForForm()]);
       closeCreateModal();
     } catch (error) {
+      const apiFieldErrors = extractExpenseDepartmentsFieldErrors(error);
+
+      if (Object.keys(apiFieldErrors).length > 0) {
+        setExpenseDepartmentsFieldErrors(apiFieldErrors);
+      }
+
       setFormError(normalizeBudgetError(error, "Não foi possível criar o orçamento."));
     } finally {
       setIsSaving(false);
@@ -776,8 +1210,10 @@ const BudgetsPage = () => {
         status: budget.status,
         totalPrice: budget.finalPrice,
         items: budget.items,
+        expenseDepartments: budget.expenseDepartments,
       });
       void loadProductsForForm();
+      void loadExpenseDepartmentsCatalog();
     } catch (error) {
       setSelectedBudget(null);
       setDetailError(normalizeBudgetError(error, "Não foi possível carregar os detalhes do orçamento."));
@@ -792,6 +1228,8 @@ const BudgetsPage = () => {
     setDetailError("");
     setDetailForm(createInitialDetailForm());
     setDetailNewItem(createEmptyMaterialInput());
+    setDetailExpenseDepartmentsSearch("");
+    setDetailExpenseDepartmentsFieldErrors({});
   };
 
   const saveBudgetDetail = async () => {
@@ -809,8 +1247,17 @@ const BudgetsPage = () => {
       return;
     }
 
+    const departmentErrors = validateExpenseDepartments(detailForm.expenseDepartments);
+
+    if (Object.keys(departmentErrors).length > 0) {
+      setDetailExpenseDepartmentsFieldErrors(departmentErrors);
+      setDetailError("Revise os campos obrigatorios em departamentos de gasto.");
+      return;
+    }
+
     setIsUpdatingDetail(true);
     setDetailError("");
+    setDetailExpenseDepartmentsFieldErrors({});
 
     try {
       const updated = mapBudgetFromApi(
@@ -823,7 +1270,7 @@ const BudgetsPage = () => {
             : null,
           notes: detailForm.notes.trim() ? detailForm.notes.trim() : null,
           status: detailForm.status,
-          totalPrice: detailForm.totalPrice,
+          totalPrice: detailFinalPriceWithExpenses,
           materials: selectedBudget.items.map((item) => {
             const payloadItem = {
               productName: item.productName,
@@ -841,6 +1288,12 @@ const BudgetsPage = () => {
 
             return payloadItem;
           }),
+          expenseDepartments: detailForm.expenseDepartments.map((department) => ({
+            expenseDepartmentId: department.expenseDepartmentId,
+            name: department.name.trim(),
+            sector: department.sector.trim(),
+            amount: Math.max(0, Number(department.amount) || 0),
+          })),
         }),
         clientsCatalog,
       );
@@ -849,6 +1302,12 @@ const BudgetsPage = () => {
       await Promise.all([loadBudgetsFromApi(), loadProductsForForm()]);
       closeDetailModal();
     } catch (error) {
+      const apiFieldErrors = extractExpenseDepartmentsFieldErrors(error);
+
+      if (Object.keys(apiFieldErrors).length > 0) {
+        setDetailExpenseDepartmentsFieldErrors(apiFieldErrors);
+      }
+
       setDetailError(normalizeBudgetError(error, "Não foi possível atualizar o orçamento."));
     } finally {
       setIsUpdatingDetail(false);
@@ -1049,20 +1508,22 @@ const BudgetsPage = () => {
 
       y += 8;
       const summaryWidth = 78;
+      const summaryHeight = 40;
       const summaryX = pageWidth - marginX - summaryWidth;
 
-      if (y + 34 > pageHeight - 18) {
+      if (y + summaryHeight > pageHeight - 18) {
         pdf.addPage();
         y = 20;
       }
 
       pdf.setDrawColor(190, 190, 190);
-      pdf.rect(summaryX, y, summaryWidth, 34);
+      pdf.rect(summaryX, y, summaryWidth, summaryHeight);
       pdf.setFont("helvetica", "normal");
       pdf.setFontSize(9);
 
       const summaryRows: Array<[string, string]> = [
         ["Materiais", formatCurrency(budget.materialCost)],
+        ["Deptos. gasto", formatCurrency(budget.expenseDepartmentsCost)],
         ["Mão de obra", formatCurrency(budget.laborCost)],
         ["Custo total", formatCurrency(budget.totalCost)],
         ["Margem", formatPercent(budget.profitMargin)],
@@ -1405,6 +1866,11 @@ const BudgetsPage = () => {
       ),
     },
     { key: "description", header: "Descrição" },
+    {
+      key: "expenseDepartments",
+      header: "Deptos. gasto",
+      render: (b: BudgetRow) => `${b.expenseDepartments.length} • ${formatCurrency(b.expenseDepartmentsCost)}`,
+    },
     { key: "finalPrice", header: "Preço Final", mono: true, render: (b: BudgetRow) => `R$ ${b.finalPrice.toFixed(2)}` },
     { key: "deliveryDate", header: "Entrega", mono: true, render: (b: BudgetRow) => b.deliveryDate || "-" },
     { key: "status", header: "Status", render: (b: BudgetRow) => <StatusBadge status={b.status} /> },
@@ -1691,24 +2157,132 @@ const BudgetsPage = () => {
             </div>
           </div>
 
+          <div>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Departamentos de gasto</p>
+              <button
+                type="button"
+                onClick={addExpenseDepartment}
+                className="px-3 py-1 text-[11px] font-bold rounded border border-border hover:bg-secondary transition-colors text-foreground"
+              >
+                Adicionar departamento
+              </button>
+            </div>
+
+            {expenseDepartmentsCatalogError && (
+              <div className="mb-3 border border-destructive/40 bg-destructive/10 rounded px-3 py-2 text-sm text-destructive flex items-center justify-between gap-3">
+                <span>{expenseDepartmentsCatalogError}</span>
+                <button
+                  onClick={() => void loadExpenseDepartmentsCatalog(expenseDepartmentsSearch)}
+                  className="px-2 py-1 text-[11px] font-bold rounded border border-destructive/30 hover:bg-destructive/20"
+                >
+                  TENTAR NOVAMENTE
+                </button>
+              </div>
+            )}
+
+            <div className="mb-3">
+              <FormField
+                label="Buscar no catalogo de departamentos"
+                value={expenseDepartmentsSearch}
+                onChange={(event) => setExpenseDepartmentsSearch(event.target.value)}
+                placeholder="Digite nome ou setor"
+              />
+            </div>
+
+            {form.expenseDepartments.length === 0 ? (
+              <p className="text-xs text-muted-foreground">Nenhum departamento adicionado.</p>
+            ) : (
+              <div className="space-y-3">
+                {form.expenseDepartments.map((department, index) => (
+                  <div key={`expense-create-${index}`} className="rounded border border-border p-3 space-y-3 bg-secondary/10">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <FormField
+                        label="Reusar do catalogo (opcional)"
+                        as="select"
+                        value={department.expenseDepartmentId || ""}
+                        onChange={(event) => {
+                          const catalogId = event.target.value;
+                          updateExpenseDepartmentField(index, "expenseDepartmentId", catalogId);
+
+                          if (catalogId) {
+                            applyCatalogToExpenseDepartment(index, catalogId);
+                          }
+                        }}
+                        options={expenseDepartmentsCatalog.map((catalogItem) => ({
+                          value: catalogItem.id,
+                          label: formatExpenseDepartmentSuggestion(catalogItem),
+                        }))}
+                      />
+
+                      <FormField
+                        label="Valor"
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={department.amount}
+                        onChange={(event) =>
+                          updateExpenseDepartmentField(index, "amount", Number(event.target.value))
+                        }
+                        error={expenseDepartmentsFieldErrors[`${index}-amount`]}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <FormField
+                        label="Nome"
+                        value={department.name}
+                        onChange={(event) => updateExpenseDepartmentField(index, "name", event.target.value)}
+                        placeholder="Ex.: Terceirizado eletrica"
+                        error={expenseDepartmentsFieldErrors[`${index}-name`]}
+                      />
+
+                      <FormField
+                        label="Setor"
+                        value={department.sector}
+                        onChange={(event) => updateExpenseDepartmentField(index, "sector", event.target.value)}
+                        placeholder="Ex.: Eletrica"
+                        error={expenseDepartmentsFieldErrors[`${index}-sector`]}
+                      />
+                    </div>
+
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => removeExpenseDepartment(index)}
+                        className="px-3 py-1 text-[11px] font-bold rounded border border-border text-muted-foreground hover:text-destructive hover:border-destructive/40"
+                      >
+                        Remover departamento
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <FormField label="Mão de Obra (R$)" type="number" step="0.01" value={form.laborCost} onChange={e => setForm({ ...form, laborCost: Number(e.target.value) })} />
             <FormField label="Margem de Lucro (%)" type="number" step="1" value={form.profitMargin * 100} onChange={e => setForm({ ...form, profitMargin: Number(e.target.value) / 100 })} />
           </div>
 
           <div className="border border-border rounded p-4 bg-secondary/20">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-center">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-center">
               <div>
                 <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Materiais</p>
                 <p className="font-mono font-bold text-foreground">R$ {calc.materialCost.toFixed(2)}</p>
               </div>
               <div>
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Deptos. gasto</p>
+                <p className="font-mono font-bold text-foreground">R$ {expenseDepartmentsCost.toFixed(2)}</p>
+              </div>
+              <div>
                 <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Custo Total</p>
-                <p className="font-mono font-bold text-foreground">R$ {calc.totalCost.toFixed(2)}</p>
+                <p className="font-mono font-bold text-foreground">R$ {totalCostWithExpenses.toFixed(2)}</p>
               </div>
               <div>
                 <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Preço Final</p>
-                <p className="font-mono font-bold text-primary text-lg">R$ {calc.finalPrice.toFixed(2)}</p>
+                <p className="font-mono font-bold text-primary text-lg">R$ {finalPriceWithExpenses.toFixed(2)}</p>
               </div>
             </div>
           </div>
@@ -1876,13 +2450,8 @@ const BudgetsPage = () => {
                 type="number"
                 min={0}
                 step="0.01"
-                value={detailForm.totalPrice}
-                onChange={(e) =>
-                  setDetailForm((current) => ({
-                    ...current,
-                    totalPrice: Number(e.target.value),
-                  }))
-                }
+                value={Number(detailFinalPriceWithExpenses.toFixed(2))}
+                disabled
               />
             </div>
 
@@ -1998,6 +2567,131 @@ const BudgetsPage = () => {
                     >
                       {detailNewItem.mode === "existing" && isLoadingProducts ? "CARREGANDO..." : "ADICIONAR"}
                     </button>
+                  </div>
+                </div>
+
+                <div className="mt-6">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Departamentos de gasto</p>
+                    <button
+                      type="button"
+                      onClick={addDetailExpenseDepartment}
+                      className="px-3 py-1 text-[11px] font-bold rounded border border-border hover:bg-secondary transition-colors text-foreground"
+                    >
+                      Adicionar departamento
+                    </button>
+                  </div>
+
+                  {expenseDepartmentsCatalogError && (
+                    <div className="mb-3 border border-destructive/40 bg-destructive/10 rounded px-3 py-2 text-sm text-destructive flex items-center justify-between gap-3">
+                      <span>{expenseDepartmentsCatalogError}</span>
+                      <button
+                        onClick={() => void loadExpenseDepartmentsCatalog(detailExpenseDepartmentsSearch)}
+                        className="px-2 py-1 text-[11px] font-bold rounded border border-destructive/30 hover:bg-destructive/20"
+                      >
+                        TENTAR NOVAMENTE
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="mb-3">
+                    <FormField
+                      label="Buscar no catalogo de departamentos"
+                      value={detailExpenseDepartmentsSearch}
+                      onChange={(event) => setDetailExpenseDepartmentsSearch(event.target.value)}
+                      placeholder="Digite nome ou setor"
+                    />
+                  </div>
+
+                  {detailForm.expenseDepartments.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">Nenhum departamento adicionado.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {detailForm.expenseDepartments.map((department, index) => (
+                        <div key={`expense-detail-${index}`} className="rounded border border-border p-3 space-y-3 bg-secondary/10">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <FormField
+                              label="Reusar do catalogo (opcional)"
+                              as="select"
+                              value={department.expenseDepartmentId || ""}
+                              onChange={(event) => {
+                                const catalogId = event.target.value;
+                                updateDetailExpenseDepartmentField(index, "expenseDepartmentId", catalogId);
+
+                                if (catalogId) {
+                                  applyCatalogToDetailExpenseDepartment(index, catalogId);
+                                }
+                              }}
+                              options={expenseDepartmentsCatalog.map((catalogItem) => ({
+                                value: catalogItem.id,
+                                label: formatExpenseDepartmentSuggestion(catalogItem),
+                              }))}
+                            />
+
+                            <FormField
+                              label="Valor"
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              value={department.amount}
+                              onChange={(event) =>
+                                updateDetailExpenseDepartmentField(index, "amount", Number(event.target.value))
+                              }
+                              error={detailExpenseDepartmentsFieldErrors[`${index}-amount`]}
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <FormField
+                              label="Nome"
+                              value={department.name}
+                              onChange={(event) => updateDetailExpenseDepartmentField(index, "name", event.target.value)}
+                              placeholder="Ex.: Terceirizado eletrica"
+                              error={detailExpenseDepartmentsFieldErrors[`${index}-name`]}
+                            />
+
+                            <FormField
+                              label="Setor"
+                              value={department.sector}
+                              onChange={(event) => updateDetailExpenseDepartmentField(index, "sector", event.target.value)}
+                              placeholder="Ex.: Eletrica"
+                              error={detailExpenseDepartmentsFieldErrors[`${index}-sector`]}
+                            />
+                          </div>
+
+                          <div className="flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => removeDetailExpenseDepartment(index)}
+                              className="px-3 py-1 text-[11px] font-bold rounded border border-border text-muted-foreground hover:text-destructive hover:border-destructive/40"
+                            >
+                              Remover departamento
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-6 border border-border rounded p-4 bg-secondary/20">
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-center">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Materiais</p>
+                      <p className="font-mono font-bold text-foreground">{formatCurrency(detailMaterialCost)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Deptos. gasto</p>
+                      <p className="font-mono font-bold text-foreground">{formatCurrency(detailExpenseDepartmentsCost)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Custo total</p>
+                      <p className="font-mono font-bold text-foreground">{formatCurrency(detailTotalCostWithExpenses)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Preço total</p>
+                      <p className="font-mono font-bold text-primary">{formatCurrency(detailFinalPriceWithExpenses)}</p>
+                    </div>
                   </div>
                 </div>
               </div>
