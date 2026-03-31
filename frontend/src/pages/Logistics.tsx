@@ -1,11 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
+import { Bar, BarChart, CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { DashboardLayout } from "@/layouts/DashboardLayout";
 import { DataTable } from "@/components/DataTable";
 import { StatusBadge } from "@/components/StatusBadge";
-import { orders as mockOrders } from "@/data/mockData";
+import { listBudgets, type Budget } from "@/services/budgets";
 import { listProductions, EmployeeProduction } from "@/services/productions";
 import { listTeams } from "@/services/teams";
 import { listEmployees } from "@/services/employees";
+import {
+  ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "@/components/ui/chart";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertTriangle, CheckCircle2, Clock3, DollarSign, Truck, UserCheck, Users } from "lucide-react";
 import { StatCard } from "@/components/StatCard";
 
@@ -24,10 +34,51 @@ interface MaterialUsageRow {
   productionsCount: number;
 }
 
+interface FinancialBudgetRow {
+  id: string;
+  clientName: string;
+  referenceDate: string;
+  revenue: number;
+  cost: number;
+  grossProfit: number;
+  netProfit: number;
+}
+
+interface FinancialMonthRow {
+  monthKey: string;
+  month: string;
+  cost: number;
+  grossProfit: number;
+  netProfit: number;
+}
+
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
-const apiBaseUrl = (import.meta.env.VITE_API_URL || "").trim().replace(/\/$/, "");
-const isDevelopment = import.meta.env.DEV;
-const isApiConfigured = Boolean(apiBaseUrl);
+
+const financialByProductionChartConfig = {
+  cost: {
+    label: "Gastos",
+    color: "#ef4444",
+  },
+  grossProfit: {
+    label: "Lucro",
+    color: "#22c55e",
+  },
+} satisfies ChartConfig;
+
+const financialByMonthChartConfig = {
+  cost: {
+    label: "Gastos",
+    color: "#ef4444",
+  },
+  grossProfit: {
+    label: "Lucro",
+    color: "#22c55e",
+  },
+  netProfit: {
+    label: "Lucro Líquido",
+    color: "#0ea5e9",
+  },
+} satisfies ChartConfig;
 
 const isFinalizedProduction = (status: EmployeeProduction["productionStatus"]) =>
   status === "approved" || status === "delivered";
@@ -44,22 +95,23 @@ const healthStatusLabels: Record<DeliveryHealthStatus, string> = {
   on_time: "Em Dia",
 };
 
-const createMockProductionsSnapshot = (): EmployeeProduction[] =>
-  mockOrders.map((order) => ({
-    ...order,
-    materials: order.materials.map((material) => ({ ...material })),
-  }));
-
 const formatCurrency = (value: number) =>
   value.toLocaleString("pt-BR", {
     style: "currency",
     currency: "BRL",
   });
 
+const formatCurrencyAxis = (value: number) =>
+  value.toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    maximumFractionDigits: 0,
+  });
+
 const getErrorMessage = (error: unknown, fallback: string) =>
   error instanceof Error ? error.message : fallback;
 
-const normalizeDeliveryDate = (value: string) => {
+const normalizeDeliveryDate = (value: string | null | undefined) => {
   if (!value) {
     return "";
   }
@@ -134,54 +186,94 @@ const formatDaysToDelivery = (daysToDelivery: number | null) => {
 
 const formatDeliveryDate = (value: string) => normalizeDeliveryDate(value) || "-";
 
+const buildClientChartLabel = (clientName: string) => {
+  const normalized = clientName.trim();
+
+  if (!normalized) {
+    return "Sem Cliente";
+  }
+
+  if (normalized.length <= 16) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, 16)}...`;
+};
+
+const getApprovedReferenceDate = (budget: Budget) =>
+  normalizeDeliveryDate(budget.approvedAt || budget.updatedAt || budget.createdAt || budget.deliveryDate);
+
+const normalizeMarginValue = (value: number) => {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  if (value > 1 && value <= 100) {
+    return value / 100;
+  }
+
+  return value;
+};
+
+const getMonthReference = (deliveryDate: string) => {
+  const normalized = normalizeDeliveryDate(deliveryDate);
+
+  if (!normalized) {
+    return { monthKey: "sem-data", month: "Sem data" };
+  }
+
+  const parsed = new Date(`${normalized}T00:00:00`);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return { monthKey: "sem-data", month: "Sem data" };
+  }
+
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+
+  return {
+    monthKey: `${parsed.getFullYear()}-${month}`,
+    month: parsed.toLocaleDateString("pt-BR", { month: "short", year: "2-digit" }),
+  };
+};
+
 const LogisticsPage = () => {
   const [productions, setProductions] = useState<EmployeeProduction[]>([]);
+  const [budgets, setBudgets] = useState<Budget[]>([]);
   const [teamCount, setTeamCount] = useState(0);
   const [activeEmployeesCount, setActiveEmployeesCount] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [requestError, setRequestError] = useState("");
-  const [modeNotice, setModeNotice] = useState("");
   const [secondaryWarning, setSecondaryWarning] = useState("");
 
   const loadLogisticsData = async () => {
     setIsLoading(true);
     setRequestError("");
-    setModeNotice("");
     setSecondaryWarning("");
 
-    if (isDevelopment && !isApiConfigured) {
-      const fallbackProductions = createMockProductionsSnapshot();
-      setProductions(fallbackProductions);
-      setTeamCount(new Set(fallbackProductions.map((item) => item.installationTeam).filter(Boolean)).size);
-      setActiveEmployeesCount(null);
-      setModeNotice(
-        "Modo local ativo: usando dados mock de produções. A contagem de funcionários ativos exige API de funcionários.",
-      );
-      setIsLoading(false);
-      return;
-    }
-
     try {
-      const [productionsResult, teamsResult, employeesResult] = await Promise.allSettled([
+      const [productionsResult, teamsResult, employeesResult, budgetsResult] = await Promise.allSettled([
         listProductions(),
         listTeams(),
         listEmployees(),
+        listBudgets(),
       ]);
 
-      let nextProductions: EmployeeProduction[] = [];
-
-      if (productionsResult.status === "fulfilled") {
-        nextProductions = productionsResult.value;
-      } else if (isDevelopment) {
-        nextProductions = createMockProductionsSnapshot();
-        setModeNotice("Backend de produções indisponível. Exibindo dados mock para desenvolvimento.");
-      } else {
+      if (productionsResult.status !== "fulfilled") {
         throw new Error(getErrorMessage(productionsResult.reason, "Falha ao carregar produções."));
       }
+
+      const nextProductions = productionsResult.value;
 
       setProductions(nextProductions);
 
       const warnings: string[] = [];
+
+      if (budgetsResult.status === "fulfilled") {
+        setBudgets(budgetsResult.value);
+      } else {
+        setBudgets([]);
+        warnings.push("Não foi possível obter orçamentos do banco para calcular lucro e receita na logística.");
+      }
 
       if (teamsResult.status === "fulfilled") {
         setTeamCount(teamsResult.value.length);
@@ -200,6 +292,7 @@ const LogisticsPage = () => {
       setSecondaryWarning(warnings.join(" "));
     } catch (error) {
       setProductions([]);
+      setBudgets([]);
       setTeamCount(0);
       setActiveEmployeesCount(null);
       setRequestError(`Não foi possível carregar dados de logística: ${getErrorMessage(error, "Erro inesperado.")}`);
@@ -250,6 +343,129 @@ const LogisticsPage = () => {
     () => activeProductions.reduce((sum, item) => sum + item.initialCost, 0),
     [activeProductions],
   );
+
+  const approvedBudgets = useMemo(
+    () => budgets.filter((budget) => budget.status === "approved"),
+    [budgets],
+  );
+
+  const { financialRows, budgetsWithoutMarginCount } = useMemo(() => {
+    const rows: FinancialBudgetRow[] = [];
+
+    approvedBudgets.forEach((budget) => {
+      const margin =
+        typeof budget.profitMargin === "number" ? normalizeMarginValue(budget.profitMargin) : null;
+
+      if (margin === null || margin < 0) {
+        return;
+      }
+
+      const revenue = Number(budget.totalPrice) || 0;
+      const costFromApi =
+        typeof budget.totalCost === "number" && Number.isFinite(budget.totalCost)
+          ? budget.totalCost
+          : null;
+      const profitFromApi =
+        typeof budget.profitValue === "number" && Number.isFinite(budget.profitValue)
+          ? budget.profitValue
+          : null;
+
+      const grossProfit =
+        profitFromApi ??
+        (costFromApi !== null
+          ? costFromApi * margin
+          : margin > -1
+            ? revenue * (margin / (1 + margin))
+            : 0);
+
+      const cost = costFromApi ?? Math.max(0, revenue - grossProfit);
+
+      rows.push({
+        id: budget.id,
+        clientName: budget.clientName,
+        referenceDate: getApprovedReferenceDate(budget),
+        revenue,
+        cost,
+        grossProfit,
+        netProfit: cost - grossProfit,
+      });
+    });
+
+    return {
+      financialRows: rows,
+      budgetsWithoutMarginCount: Math.max(0, approvedBudgets.length - rows.length),
+    };
+  }, [approvedBudgets]);
+
+  const financialTotals = useMemo(
+    () =>
+      financialRows.reduce(
+        (acc, item) => {
+          acc.revenue += item.revenue;
+          acc.cost += item.cost;
+          acc.grossProfit += item.grossProfit;
+          acc.netProfit += item.netProfit;
+          return acc;
+        },
+        {
+          revenue: 0,
+          cost: 0,
+          grossProfit: 0,
+          netProfit: 0,
+        },
+      ),
+    [financialRows],
+  );
+
+  const financialCoverageSummary =
+    approvedBudgets.length === 0
+      ? "Sem orçamentos aprovados"
+      : `${financialRows.length}/${approvedBudgets.length} aprovados com margem`;
+
+  const financialCoverageWarning =
+    approvedBudgets.length > 0 && budgetsWithoutMarginCount > 0
+      ? `Lucro calculado com ${financialRows.length} de ${approvedBudgets.length} orçamentos aprovados. ${budgetsWithoutMarginCount} orçamento(s) não retornaram margem de lucro pela API.`
+      : "";
+
+  const financialByBudgetRows = useMemo(
+    () =>
+      [...financialRows]
+        .sort((a, b) => a.referenceDate.localeCompare(b.referenceDate))
+        .slice(0, 8)
+        .map((item) => ({
+          id: item.id,
+          label: buildClientChartLabel(item.clientName),
+          cost: item.cost,
+          grossProfit: item.grossProfit,
+        })),
+    [financialRows],
+  );
+
+  const financialByMonthRows = useMemo<FinancialMonthRow[]>(() => {
+    const map = new Map<string, FinancialMonthRow>();
+
+    financialRows.forEach((item) => {
+      const { monthKey, month } = getMonthReference(item.referenceDate);
+      const current = map.get(monthKey);
+
+      if (!current) {
+        map.set(monthKey, {
+          monthKey,
+          month,
+          cost: item.cost,
+          grossProfit: item.grossProfit,
+          netProfit: item.netProfit,
+        });
+        return;
+      }
+
+      current.cost += item.cost;
+      current.grossProfit += item.grossProfit;
+      current.netProfit += item.netProfit;
+    });
+
+    return Array.from(map.values()).sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+  }, [financialRows]);
 
   const materialUsageRows = useMemo<MaterialUsageRow[]>(() => {
     const map = new Map<string, MaterialUsageRow>();
@@ -338,15 +554,15 @@ const LogisticsPage = () => {
   return (
     <DashboardLayout title="Logística" subtitle="Entregas e Instalação">
       <div className="animate-fade-in space-y-8">
-        {modeNotice && (
-          <div className="border border-amber-300/50 bg-amber-50 rounded px-3 py-2 text-sm text-amber-900">
-            {modeNotice}
-          </div>
-        )}
-
         {secondaryWarning && (
           <div className="border border-amber-300/40 bg-amber-50/70 rounded px-3 py-2 text-sm text-amber-900">
             {secondaryWarning}
+          </div>
+        )}
+
+        {financialCoverageWarning && (
+          <div className="border border-amber-300/40 bg-amber-50/70 rounded px-3 py-2 text-sm text-amber-900">
+            {financialCoverageWarning}
           </div>
         )}
 
@@ -362,7 +578,7 @@ const LogisticsPage = () => {
           </div>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5 gap-4">
           <StatCard title="Equipes" value={teamCount} icon={<Users className="h-4 w-4" />} />
           <StatCard
             title="Funcionários Ativos"
@@ -388,6 +604,141 @@ const LogisticsPage = () => {
             value={formatCurrency(activeProductionsCost)}
             icon={<DollarSign className="h-4 w-4" />}
           />
+          <StatCard
+            title="Receita Vinculada"
+            value={formatCurrency(financialTotals.revenue)}
+            icon={<DollarSign className="h-4 w-4" />}
+            subtitle={financialCoverageSummary}
+          />
+          <StatCard
+            title="Lucro Bruto"
+            value={formatCurrency(financialTotals.grossProfit)}
+            icon={<DollarSign className="h-4 w-4" />}
+            subtitle="Base: margem dos orçamentos aprovados"
+            highlight={financialTotals.grossProfit < 0}
+          />
+          <StatCard
+            title="Lucro Líquido"
+            value={formatCurrency(financialTotals.netProfit)}
+            icon={<DollarSign className="h-4 w-4" />}
+            subtitle="Fórmula: custo - lucro"
+          />
+        </div>
+
+        <div className="grid grid-cols-1 2xl:grid-cols-2 gap-4">
+          <Card>
+            <CardHeader className="pb-0">
+              <CardTitle className="text-sm">Gastos x Lucro por Orçamento Aprovado</CardTitle>
+              <CardDescription>
+                Comparativo dos primeiros 8 orçamentos aprovados com margem de lucro retornada pelo banco.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="pt-4">
+              {financialByBudgetRows.length > 0 ? (
+                <ChartContainer
+                  config={financialByProductionChartConfig}
+                  className="h-[280px] w-full aspect-auto"
+                >
+                  <BarChart data={financialByBudgetRows}>
+                    <CartesianGrid vertical={false} />
+                    <XAxis
+                      dataKey="label"
+                      tickLine={false}
+                      axisLine={false}
+                      tickMargin={8}
+                      minTickGap={24}
+                    />
+                    <YAxis
+                      tickLine={false}
+                      axisLine={false}
+                      tickFormatter={formatCurrencyAxis}
+                      width={110}
+                    />
+                    <ChartTooltip
+                      content={
+                        <ChartTooltipContent
+                          formatter={(value) => formatCurrency(Number(value) || 0)}
+                        />
+                      }
+                    />
+                    <ChartLegend content={<ChartLegendContent />} />
+                    <Bar dataKey="cost" fill="var(--color-cost)" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="grossProfit" fill="var(--color-grossProfit)" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ChartContainer>
+              ) : (
+                <p className="text-sm text-muted-foreground py-6">
+                  Sem orçamentos aprovados com margem para montar o gráfico comparativo.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-0">
+              <CardTitle className="text-sm">Evolução de Gastos e Lucro (Aprovados)</CardTitle>
+              <CardDescription>
+                Valores por mês de aprovação, considerando margem de lucro de cada orçamento.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="pt-4">
+              {financialByMonthRows.length > 0 ? (
+                <ChartContainer
+                  config={financialByMonthChartConfig}
+                  className="h-[280px] w-full aspect-auto"
+                >
+                  <LineChart data={financialByMonthRows}>
+                    <CartesianGrid vertical={false} />
+                    <XAxis
+                      dataKey="month"
+                      tickLine={false}
+                      axisLine={false}
+                      tickMargin={8}
+                    />
+                    <YAxis
+                      tickLine={false}
+                      axisLine={false}
+                      tickFormatter={formatCurrencyAxis}
+                      width={110}
+                    />
+                    <ChartTooltip
+                      content={
+                        <ChartTooltipContent
+                          formatter={(value) => formatCurrency(Number(value) || 0)}
+                        />
+                      }
+                    />
+                    <ChartLegend content={<ChartLegendContent />} />
+                    <Line
+                      type="monotone"
+                      dataKey="cost"
+                      stroke="var(--color-cost)"
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="grossProfit"
+                      stroke="var(--color-grossProfit)"
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="netProfit"
+                      stroke="var(--color-netProfit)"
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                  </LineChart>
+                </ChartContainer>
+              ) : (
+                <p className="text-sm text-muted-foreground py-6">
+                  Sem dados financeiros de orçamentos aprovados para montar a evolução mensal.
+                </p>
+              )}
+            </CardContent>
+          </Card>
         </div>
 
         <div>

@@ -17,12 +17,15 @@ import {
   listBudgets,
   updateBudget,
   type Budget as ApiBudget,
+  type BudgetCategory,
   type BudgetMaterial as ApiBudgetMaterial,
   type BudgetStatus,
 } from "@/services/budgets";
 import { Client, listClients } from "@/services/clients";
 import { Product, listProducts } from "@/services/products";
 import { Plus, Trash2 } from "lucide-react";
+
+type MaterialInputMode = "existing" | "new";
 
 const imageDataUrlCache: Record<string, string | null | undefined> = {};
 
@@ -46,6 +49,17 @@ const formatStatus = (status: BudgetRow["status"]) => {
       return "Rejeitado";
     default:
       return status;
+  }
+};
+
+const formatCategory = (category: BudgetCategory) => {
+  switch (category) {
+    case "arquitetonico":
+      return "Projeto arquitetonico";
+    case "executivo":
+      return "Projeto executivo";
+    default:
+      return category;
   }
 };
 
@@ -105,7 +119,7 @@ const loadContractTopBannerDataUrl = async () => loadImageDataUrl("/partecima.pn
 const loadContractBottomBannerDataUrl = async () => loadImageDataUrl("/partebaixo_.png");
 
 interface BudgetItemRow {
-  productId: string;
+  productId?: string;
   productName: string;
   quantity: number;
   unit: string;
@@ -117,6 +131,7 @@ interface BudgetRow {
   id: string;
   clientId: string;
   clientName: string;
+  category: BudgetCategory;
   description: string;
   status: BudgetStatus;
   deliveryDate: string;
@@ -173,8 +188,16 @@ const buildClientAddress = (client: Client | undefined) => {
 
 const normalizeBudgetError = (error: unknown, fallback: string) => {
   if (error instanceof ApiError) {
+    if (error.status === 401) {
+      return "Sessao expirada. Redirecionando para login.";
+    }
+
     if (error.status === 403) {
       return "Acesso negado. Somente admin e gerente podem gerenciar orçamentos.";
+    }
+
+    if (error.status === 409) {
+      return "Conflito de produto duplicado para este material. Selecione um produto existente no catálogo.";
     }
 
     if (error.status === 500) {
@@ -196,7 +219,7 @@ const normalizeBudgetError = (error: unknown, fallback: string) => {
 };
 
 const mapBudgetItemFromApi = (item: ApiBudgetMaterial): BudgetItemRow => ({
-  productId: item.productId || "",
+  productId: item.productId || undefined,
   productName: item.productName,
   quantity: Number(item.quantity) || 0,
   unit: item.unit || "unidade",
@@ -204,12 +227,39 @@ const mapBudgetItemFromApi = (item: ApiBudgetMaterial): BudgetItemRow => ({
   subtotal: (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0),
 });
 
+const createEmptyMaterialInput = (mode: MaterialInputMode = "existing") => ({
+  mode,
+  productId: "",
+  productName: "",
+  quantity: 1,
+  unit: "unidade",
+  unitPrice: 0,
+});
+
+const getStockBadge = (stockQuantity: number) => {
+  if (stockQuantity <= 0) {
+    return {
+      label: "Precisa comprar",
+      className: "bg-destructive/20 text-destructive",
+    };
+  }
+
+  return {
+    label: "Em estoque",
+    className: "bg-success/20 text-success",
+  };
+};
+
 const mapBudgetFromApi = (budget: ApiBudget, clientsCatalog: Client[] = []): BudgetRow => {
   const items = budget.materials.map(mapBudgetItemFromApi);
   const materialCost = items.reduce((sum, item) => sum + item.subtotal, 0);
-  const totalCost = materialCost;
+  const apiTotalCost = Number(budget.totalCost);
+  const apiLaborCost = Number(budget.laborCost);
   const finalPrice = Number(budget.totalPrice) || 0;
-  const laborCost = Math.max(0, totalCost - materialCost);
+  const laborCost = Number.isFinite(apiLaborCost)
+    ? Math.max(0, apiLaborCost)
+    : Math.max(0, Number.isFinite(apiTotalCost) ? apiTotalCost - materialCost : 0);
+  const totalCost = Number.isFinite(apiTotalCost) ? Math.max(0, apiTotalCost) : materialCost + laborCost;
   const profitMargin = totalCost > 0 ? Math.max(0, (finalPrice - totalCost) / totalCost) : 0;
 
   const linkedClient = findClientByName(clientsCatalog, budget.clientName);
@@ -218,6 +268,7 @@ const mapBudgetFromApi = (budget: ApiBudget, clientsCatalog: Client[] = []): Bud
     id: budget.id,
     clientId: linkedClient?.id || "",
     clientName: budget.clientName,
+    category: budget.category,
     description: budget.description,
     status: budget.status,
     deliveryDate: normalizeDateOnly(budget.deliveryDate),
@@ -345,6 +396,7 @@ const replaceContractPlaceholders = (value: string, contractValue: number) =>
 
 const createInitialBudgetForm = () => ({
   clientId: "",
+  category: "arquitetonico" as BudgetCategory,
   description: "",
   deliveryDate: "",
   notes: "",
@@ -355,11 +407,13 @@ const createInitialBudgetForm = () => ({
 
 const createInitialDetailForm = () => ({
   clientName: "",
+  category: "arquitetonico" as BudgetCategory,
   description: "",
   deliveryDate: "",
   notes: "",
   status: "draft" as BudgetStatus,
   totalPrice: 0,
+  items: [] as BudgetItemRow[],
 });
 
 const BudgetsPage = () => {
@@ -391,12 +445,9 @@ const BudgetsPage = () => {
   const [clientsError, setClientsError] = useState("");
   const [detailForm, setDetailForm] = useState(createInitialDetailForm());
   const [form, setForm] = useState(createInitialBudgetForm);
-  const [newItem, setNewItem] = useState({
-    productId: "",
-    quantity: 1,
-    unit: "unidade",
-    unitPrice: 0,
-  });
+  const [categoryFilter, setCategoryFilter] = useState<"all" | BudgetCategory>("all");
+  const [newItem, setNewItem] = useState(createEmptyMaterialInput);
+  const [detailNewItem, setDetailNewItem] = useState(createEmptyMaterialInput);
   const [contractForm, setContractForm] = useState<ContractFormState>({
     contratanteName: "",
     operationName: "",
@@ -409,12 +460,15 @@ const BudgetsPage = () => {
     clauses: createDefaultContractClauses(),
   });
 
-  const loadBudgetsFromApi = async (availableClients: Client[] = clientsCatalog) => {
+  const loadBudgetsFromApi = async (
+    availableClients: Client[] = clientsCatalog,
+    activeCategoryFilter: "all" | BudgetCategory = categoryFilter,
+  ) => {
     setIsLoading(true);
     setRequestError("");
 
     try {
-      const budgets = await listBudgets();
+      const budgets = await listBudgets(activeCategoryFilter === "all" ? undefined : activeCategoryFilter);
       setData(budgets.map((budget) => mapBudgetFromApi(budget, availableClients)));
     } catch (error) {
       setData([]);
@@ -445,6 +499,10 @@ const BudgetsPage = () => {
     void loadClientsForForms();
     void loadBudgetsFromApi();
   }, []);
+
+  useEffect(() => {
+    void loadBudgetsFromApi(clientsCatalog, categoryFilter);
+  }, [categoryFilter]);
 
   useEffect(() => {
     if (clientsCatalog.length === 0) {
@@ -517,13 +575,20 @@ const BudgetsPage = () => {
   };
 
   const addItem = () => {
-    const product = productsCatalog.find((p) => p.id === newItem.productId);
     const quantity = Number(newItem.quantity);
     const unitPrice = Number(newItem.unitPrice);
     const unit = newItem.unit.trim() || "unidade";
+    const isExistingMode = newItem.mode === "existing";
 
-    if (!product) {
-      setFormError("Selecione um produto valido.");
+    const product = isExistingMode ? productsCatalog.find((p) => p.id === newItem.productId) : undefined;
+    const productName = isExistingMode ? product?.name || "" : newItem.productName.trim();
+
+    if (!productName) {
+      setFormError(
+        isExistingMode
+          ? "Selecione um produto valido."
+          : "Informe o nome do material novo.",
+      );
       return;
     }
 
@@ -538,8 +603,8 @@ const BudgetsPage = () => {
     }
 
     const item: BudgetItemRow = {
-      productId: product.id,
-      productName: product.name,
+      productId: product?.id,
+      productName,
       quantity,
       unit,
       unitPrice,
@@ -548,21 +613,86 @@ const BudgetsPage = () => {
 
     setForm((current) => ({ ...current, items: [...current.items, item] }));
     setFormError("");
-    setNewItem({ productId: "", quantity: 1, unit: "unidade", unitPrice: 0 });
+    setNewItem(createEmptyMaterialInput(newItem.mode));
+  };
+
+  const addDetailItem = () => {
+    if (!selectedBudget) {
+      return;
+    }
+
+    const quantity = Number(detailNewItem.quantity);
+    const unitPrice = Number(detailNewItem.unitPrice);
+    const unit = detailNewItem.unit.trim() || "unidade";
+    const isExistingMode = detailNewItem.mode === "existing";
+
+    const product = isExistingMode
+      ? productsCatalog.find((p) => p.id === detailNewItem.productId)
+      : undefined;
+    const productName = isExistingMode ? product?.name || "" : detailNewItem.productName.trim();
+
+    if (!productName) {
+      setDetailError(
+        isExistingMode
+          ? "Selecione um produto valido."
+          : "Informe o nome do material novo.",
+      );
+      return;
+    }
+
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setDetailError("Informe uma quantidade valida para o material.");
+      return;
+    }
+
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+      setDetailError("Informe um valor unitario valido para o material.");
+      return;
+    }
+
+    const item: BudgetItemRow = {
+      productId: product?.id,
+      productName,
+      quantity,
+      unit,
+      unitPrice,
+      subtotal: unitPrice * quantity,
+    };
+
+    const nextItems = [...selectedBudget.items, item];
+
+    setSelectedBudget((current) =>
+      current
+        ? {
+            ...current,
+            items: nextItems,
+          }
+        : current,
+    );
+    setDetailForm((current) => ({ ...current, items: nextItems }));
+    setDetailError("");
+    setDetailNewItem(createEmptyMaterialInput(detailNewItem.mode));
   };
 
   const removeItem = (idx: number) => {
     setForm((current) => ({ ...current, items: current.items.filter((_, i) => i !== idx) }));
   };
 
-  const calc = calculateBudget(form.items, form.laborCost, form.profitMargin);
+  const calc = calculateBudget(
+    form.items.map((item) => ({
+      ...item,
+      productId: item.productId || "new-material",
+    })),
+    form.laborCost,
+    form.profitMargin,
+  );
 
   const closeCreateModal = () => {
     setModal(false);
     setFormError("");
     setForm(createInitialBudgetForm());
     setProductsError("");
-    setNewItem({ productId: "", quantity: 1, unit: "unidade", unitPrice: 0 });
+    setNewItem(createEmptyMaterialInput());
   };
 
   const saveBudget = async () => {
@@ -578,15 +708,13 @@ const BudgetsPage = () => {
       return;
     }
 
-    if (form.items.length === 0) {
-      setFormError("Adicione ao menos um material no orçamento.");
+    if (!form.category) {
+      setFormError("Selecione a categoria do orcamento.");
       return;
     }
 
-    const hasMaterialWithoutProduct = form.items.some((item) => !item.productId);
-
-    if (hasMaterialWithoutProduct) {
-      setFormError("Todos os materiais devem estar vinculados a um produto do banco.");
+    if (form.items.length === 0) {
+      setFormError("Adicione ao menos um material no orçamento.");
       return;
     }
 
@@ -596,21 +724,33 @@ const BudgetsPage = () => {
     try {
       const created = await createBudget({
         clientName: client.name,
+        category: form.category,
         description: form.description.trim(),
         deliveryDate: form.deliveryDate ? new Date(`${form.deliveryDate}T00:00:00`).toISOString() : null,
         totalPrice: calc.finalPrice,
         notes: form.notes.trim() ? form.notes.trim() : null,
         status: "draft",
-        materials: form.items.map((item) => ({
-          productId: item.productId,
-          productName: item.productName,
-          quantity: item.quantity,
-          unit: item.unit,
-          unitPrice: item.unitPrice,
-        })),
+        materials: form.items.map((item) => {
+          const payloadItem = {
+            productName: item.productName,
+            quantity: item.quantity,
+            unit: item.unit,
+            unitPrice: item.unitPrice,
+          };
+
+          if (item.productId) {
+            return {
+              ...payloadItem,
+              productId: item.productId,
+            };
+          }
+
+          return payloadItem;
+        }),
       });
 
-      setData((current) => [mapBudgetFromApi(created), ...current]);
+      setData((current) => [mapBudgetFromApi(created, clientsCatalog), ...current]);
+      await Promise.all([loadBudgetsFromApi(), loadProductsForForm()]);
       closeCreateModal();
     } catch (error) {
       setFormError(normalizeBudgetError(error, "Não foi possível criar o orçamento."));
@@ -629,12 +769,15 @@ const BudgetsPage = () => {
       setSelectedBudget(budget);
       setDetailForm({
         clientName: budget.clientName,
+        category: budget.category,
         description: budget.description,
         deliveryDate: budget.deliveryDate,
         notes: budget.notes || "",
         status: budget.status,
         totalPrice: budget.finalPrice,
+        items: budget.items,
       });
+      void loadProductsForForm();
     } catch (error) {
       setSelectedBudget(null);
       setDetailError(normalizeBudgetError(error, "Não foi possível carregar os detalhes do orçamento."));
@@ -648,6 +791,7 @@ const BudgetsPage = () => {
     setSelectedBudget(null);
     setDetailError("");
     setDetailForm(createInitialDetailForm());
+    setDetailNewItem(createEmptyMaterialInput());
   };
 
   const saveBudgetDetail = async () => {
@@ -656,7 +800,12 @@ const BudgetsPage = () => {
     }
 
     if (!detailForm.clientName.trim() || !detailForm.description.trim()) {
-      setDetailError("Cliente e descrição são obrigatórios.");
+      setDetailError("Cliente e descricao sao obrigatorios.");
+      return;
+    }
+
+    if (!detailForm.category) {
+      setDetailError("Selecione a categoria do orcamento.");
       return;
     }
 
@@ -667,6 +816,7 @@ const BudgetsPage = () => {
       const updated = mapBudgetFromApi(
         await updateBudget(selectedBudget.id, {
           clientName: detailForm.clientName.trim(),
+          category: detailForm.category,
           description: detailForm.description.trim(),
           deliveryDate: detailForm.deliveryDate
             ? new Date(`${detailForm.deliveryDate}T00:00:00`).toISOString()
@@ -674,10 +824,29 @@ const BudgetsPage = () => {
           notes: detailForm.notes.trim() ? detailForm.notes.trim() : null,
           status: detailForm.status,
           totalPrice: detailForm.totalPrice,
+          materials: selectedBudget.items.map((item) => {
+            const payloadItem = {
+              productName: item.productName,
+              quantity: item.quantity,
+              unit: item.unit,
+              unitPrice: item.unitPrice,
+            };
+
+            if (item.productId) {
+              return {
+                ...payloadItem,
+                productId: item.productId,
+              };
+            }
+
+            return payloadItem;
+          }),
         }),
+        clientsCatalog,
       );
 
       setData((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      await Promise.all([loadBudgetsFromApi(), loadProductsForForm()]);
       closeDetailModal();
     } catch (error) {
       setDetailError(normalizeBudgetError(error, "Não foi possível atualizar o orçamento."));
@@ -1191,6 +1360,31 @@ const BudgetsPage = () => {
     label: client.companyName ? `${client.name} • ${client.companyName}` : client.name,
   }));
 
+  const resolveItemStockStatus = (item: BudgetItemRow) => {
+    const matchingProduct = item.productId
+      ? productsCatalog.find((product) => product.id === item.productId)
+      : productsCatalog.find((product) => normalizeName(product.name) === normalizeName(item.productName));
+
+    const stockQuantity = matchingProduct?.stockQuantity ?? 0;
+    return getStockBadge(stockQuantity);
+  };
+
+  const removeDetailItem = (idx: number) => {
+    setSelectedBudget((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const nextItems = current.items.filter((_, itemIndex) => itemIndex !== idx);
+      setDetailForm((detailCurrent) => ({ ...detailCurrent, items: nextItems }));
+
+      return {
+        ...current,
+        items: nextItems,
+      };
+    });
+  };
+
   if (detailForm.clientName && !detailClientOptions.some((option) => option.value === detailForm.clientName)) {
     detailClientOptions.unshift({
       value: detailForm.clientName,
@@ -1201,6 +1395,15 @@ const BudgetsPage = () => {
   const columns = [
     { key: "createdAt", header: "Data", mono: true },
     { key: "clientName", header: "Cliente" },
+    {
+      key: "category",
+      header: "Categoria",
+      render: (b: BudgetRow) => (
+        <span className="inline-flex items-center rounded px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider bg-secondary text-secondary-foreground">
+          {formatCategory(b.category)}
+        </span>
+      ),
+    },
     { key: "description", header: "Descrição" },
     { key: "finalPrice", header: "Preço Final", mono: true, render: (b: BudgetRow) => `R$ ${b.finalPrice.toFixed(2)}` },
     { key: "deliveryDate", header: "Entrega", mono: true, render: (b: BudgetRow) => b.deliveryDate || "-" },
@@ -1267,11 +1470,25 @@ const BudgetsPage = () => {
       }
     >
       <div className="animate-fade-in space-y-4">
+        <div className="w-full md:w-80">
+          <FormField
+            label="Filtrar por categoria"
+            as="select"
+            value={categoryFilter}
+            onChange={(event) => setCategoryFilter(event.target.value as "all" | BudgetCategory)}
+            options={[
+              { value: "all", label: "Todas as categorias" },
+              { value: "arquitetonico", label: formatCategory("arquitetonico") },
+              { value: "executivo", label: formatCategory("executivo") },
+            ]}
+          />
+        </div>
+
         {requestError && (
           <div className="border border-destructive/40 bg-destructive/10 rounded px-3 py-2 text-sm text-destructive flex items-center justify-between gap-3">
             <span>{requestError}</span>
             <button
-              onClick={() => void loadBudgetsFromApi()}
+              onClick={() => void loadBudgetsFromApi(clientsCatalog, categoryFilter)}
               className="px-2 py-1 text-[11px] font-bold rounded border border-destructive/30 hover:bg-destructive/20"
             >
               TENTAR NOVAMENTE
@@ -1313,6 +1530,17 @@ const BudgetsPage = () => {
               value: client.id,
               label: client.companyName ? `${client.name} • ${client.companyName}` : client.name,
             }))}
+          />
+
+          <FormField
+            label="Categoria do orcamento"
+            as="select"
+            value={form.category}
+            onChange={(e) => setForm({ ...form, category: e.target.value as BudgetCategory })}
+            options={[
+              { value: "arquitetonico", label: formatCategory("arquitetonico") },
+              { value: "executivo", label: formatCategory("executivo") },
+            ]}
           />
 
           {!isLoadingClients && clientsCatalog.length === 0 && (
@@ -1361,7 +1589,14 @@ const BudgetsPage = () => {
               <div className="border border-border rounded mb-3 divide-y divide-border/50">
                 {form.items.map((item, i) => (
                   <div key={i} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
-                    <span>{item.productName} × {item.quantity} {item.unit}</span>
+                    <div className="flex items-center gap-2">
+                      <span>{item.productName} × {item.quantity} {item.unit}</span>
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider ${resolveItemStockStatus(item).className}`}
+                      >
+                        {resolveItemStockStatus(item).label}
+                      </span>
+                    </div>
                     <div className="flex items-center gap-3">
                       <span className="font-mono text-xs">R$ {item.subtotal.toFixed(2)}</span>
                       <button onClick={() => removeItem(i)} className="text-muted-foreground hover:text-destructive"><Trash2 className="h-3.5 w-3.5" /></button>
@@ -1371,18 +1606,52 @@ const BudgetsPage = () => {
               </div>
             )}
 
+            <div className="mb-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setNewItem((current) => ({ ...createEmptyMaterialInput("existing"), mode: "existing" }))}
+                className={`px-3 py-1 text-[11px] font-bold rounded border transition-colors ${
+                  newItem.mode === "existing"
+                    ? "border-primary/40 bg-primary/10 text-primary"
+                    : "border-border text-muted-foreground hover:bg-secondary"
+                }`}
+              >
+                Selecionar produto existente
+              </button>
+              <button
+                type="button"
+                onClick={() => setNewItem((current) => ({ ...createEmptyMaterialInput("new"), mode: "new" }))}
+                className={`px-3 py-1 text-[11px] font-bold rounded border transition-colors ${
+                  newItem.mode === "new"
+                    ? "border-primary/40 bg-primary/10 text-primary"
+                    : "border-border text-muted-foreground hover:bg-secondary"
+                }`}
+              >
+                Cadastrar material novo
+              </button>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
               <div className="flex-1">
-                <FormField
-                  label="Produto"
-                  as="select"
-                  value={newItem.productId}
-                  onChange={e => setNewItem({ ...newItem, productId: e.target.value })}
-                  options={productsCatalog.map((product) => ({
-                    value: product.id,
-                    label: `${product.name} (Saldo: ${product.stockQuantity})`,
-                  }))}
-                />
+                {newItem.mode === "existing" ? (
+                  <FormField
+                    label="Produto"
+                    as="select"
+                    value={newItem.productId}
+                    onChange={e => setNewItem({ ...newItem, productId: e.target.value })}
+                    options={productsCatalog.map((product) => ({
+                      value: product.id,
+                      label: `${product.name} (Saldo: ${product.stockQuantity})`,
+                    }))}
+                  />
+                ) : (
+                  <FormField
+                    label="Novo material"
+                    value={newItem.productName}
+                    onChange={e => setNewItem({ ...newItem, productName: e.target.value })}
+                    placeholder="Ex.: MDF Branco 15mm"
+                  />
+                )}
               </div>
               <div className="w-full md:w-24">
                 <FormField
@@ -1413,10 +1682,10 @@ const BudgetsPage = () => {
               <div className="flex items-end">
                 <button
                   onClick={addItem}
-                  disabled={isLoadingProducts || productsCatalog.length === 0}
+                  disabled={newItem.mode === "existing" && (isLoadingProducts || productsCatalog.length === 0)}
                   className="px-3 py-2 text-xs font-bold rounded border border-border hover:bg-secondary transition-colors text-foreground disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  {isLoadingProducts ? "CARREGANDO..." : "ADICIONAR"}
+                  {newItem.mode === "existing" && isLoadingProducts ? "CARREGANDO..." : "ADICIONAR"}
                 </button>
               </div>
             </div>
@@ -1544,6 +1813,31 @@ const BudgetsPage = () => {
               />
 
               <FormField
+                label="Categoria do orcamento"
+                as="select"
+                value={detailForm.category}
+                onChange={(e) =>
+                  setDetailForm((current) => ({
+                    ...current,
+                    category: e.target.value as BudgetCategory,
+                  }))
+                }
+                options={[
+                  { value: "arquitetonico", label: formatCategory("arquitetonico") },
+                  { value: "executivo", label: formatCategory("executivo") },
+                ]}
+              />
+            </div>
+
+            {selectedBudget && (
+              <div className="rounded border border-border bg-secondary/20 px-3 py-2 text-sm">
+                <span className="text-muted-foreground">Categoria:</span>{" "}
+                <span className="font-medium text-foreground">{formatCategory(detailForm.category)}</span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <FormField
                 label="Status"
                 as="select"
                 value={detailForm.status}
@@ -1591,6 +1885,123 @@ const BudgetsPage = () => {
                 }
               />
             </div>
+
+            {selectedBudget && (
+              <div>
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-3">Materiais</p>
+
+                {selectedBudget.items.length > 0 && (
+                  <div className="border border-border rounded mb-3 divide-y divide-border/50">
+                    {selectedBudget.items.map((item, i) => (
+                      <div key={i} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
+                        <div className="flex items-center gap-2">
+                          <span>{item.productName} × {item.quantity} {item.unit}</span>
+                          <span
+                            className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider ${resolveItemStockStatus(item).className}`}
+                          >
+                            {resolveItemStockStatus(item).label}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                          <span className="font-mono text-xs">R$ {item.subtotal.toFixed(2)}</span>
+                          <button
+                            onClick={() => removeDetailItem(i)}
+                            className="text-muted-foreground hover:text-destructive"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="mb-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setDetailNewItem((current) => ({ ...createEmptyMaterialInput("existing"), mode: "existing" }))}
+                    className={`px-3 py-1 text-[11px] font-bold rounded border transition-colors ${
+                      detailNewItem.mode === "existing"
+                        ? "border-primary/40 bg-primary/10 text-primary"
+                        : "border-border text-muted-foreground hover:bg-secondary"
+                    }`}
+                  >
+                    Selecionar produto existente
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDetailNewItem((current) => ({ ...createEmptyMaterialInput("new"), mode: "new" }))}
+                    className={`px-3 py-1 text-[11px] font-bold rounded border transition-colors ${
+                      detailNewItem.mode === "new"
+                        ? "border-primary/40 bg-primary/10 text-primary"
+                        : "border-border text-muted-foreground hover:bg-secondary"
+                    }`}
+                  >
+                    Cadastrar material novo
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                  <div className="flex-1">
+                    {detailNewItem.mode === "existing" ? (
+                      <FormField
+                        label="Produto"
+                        as="select"
+                        value={detailNewItem.productId}
+                        onChange={e => setDetailNewItem({ ...detailNewItem, productId: e.target.value })}
+                        options={productsCatalog.map((product) => ({
+                          value: product.id,
+                          label: `${product.name} (Saldo: ${product.stockQuantity})`,
+                        }))}
+                      />
+                    ) : (
+                      <FormField
+                        label="Novo material"
+                        value={detailNewItem.productName}
+                        onChange={e => setDetailNewItem({ ...detailNewItem, productName: e.target.value })}
+                        placeholder="Ex.: MDF Branco 15mm"
+                      />
+                    )}
+                  </div>
+                  <div className="w-full md:w-24">
+                    <FormField
+                      label="Qtd."
+                      type="number"
+                      min={1}
+                      value={detailNewItem.quantity}
+                      onChange={e => setDetailNewItem({ ...detailNewItem, quantity: Number(e.target.value) })}
+                    />
+                  </div>
+                  <div className="w-full md:w-28">
+                    <FormField
+                      label="Unid."
+                      value={detailNewItem.unit}
+                      onChange={e => setDetailNewItem({ ...detailNewItem, unit: e.target.value })}
+                    />
+                  </div>
+                  <div className="w-full md:w-32">
+                    <FormField
+                      label="Vlr Unit."
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={detailNewItem.unitPrice}
+                      onChange={e => setDetailNewItem({ ...detailNewItem, unitPrice: Number(e.target.value) })}
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <button
+                      onClick={addDetailItem}
+                      disabled={detailNewItem.mode === "existing" && (isLoadingProducts || productsCatalog.length === 0)}
+                      className="px-3 py-2 text-xs font-bold rounded border border-border hover:bg-secondary transition-colors text-foreground disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {detailNewItem.mode === "existing" && isLoadingProducts ? "CARREGANDO..." : "ADICIONAR"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <FormField
               label="Observações"

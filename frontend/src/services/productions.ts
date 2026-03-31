@@ -18,6 +18,8 @@ export interface EmployeeProduction {
   deliveryDate: string;
   installationTeam: string;
   installationTeamId?: string;
+  budgetId?: string;
+  budgetTotalPrice?: number;
   initialCost: number;
   materials: ProductionMaterial[];
 }
@@ -155,6 +157,15 @@ const toStringSafe = (value: unknown, fallback = "") =>
 const toNumber = (value: unknown) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const toOptionalNumber = (value: unknown) => {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 };
 
 const toRecord = (value: unknown): Record<string, unknown> | null => {
@@ -675,6 +686,22 @@ const mapProduction = (value: unknown): EmployeeProduction | null => {
     "",
   );
 
+  const rawBudget = toRecord(item.budget ?? item.budgetData ?? item.budget_data);
+  const budgetId = toStringSafe(
+    item.budgetId ??
+      item.budget_id ??
+      (rawBudget ? rawBudget.id : ""),
+    "",
+  );
+
+  const budgetTotalPrice =
+    toOptionalNumber(
+      item.budgetTotalPrice ??
+        item.budget_total_price ??
+        item.totalPrice ??
+        item.total_price,
+    ) ?? (rawBudget ? toOptionalNumber(rawBudget.totalPrice ?? rawBudget.total_price) : null);
+
   return {
     id,
     clientName: toStringSafe(item.clientName ?? item.client_name, "Cliente não informado"),
@@ -683,6 +710,8 @@ const mapProduction = (value: unknown): EmployeeProduction | null => {
     deliveryDate: normalizeDeliveryDate(item.deliveryDate ?? item.delivery_date),
     installationTeam,
     installationTeamId: installationTeamId || undefined,
+    budgetId: budgetId || undefined,
+    budgetTotalPrice: budgetTotalPrice === null ? undefined : budgetTotalPrice,
     initialCost: toNumber(item.initialCost ?? item.initial_cost),
     materials: sourceMaterials.map(mapMaterial).filter((material): material is ProductionMaterial => Boolean(material)),
   };

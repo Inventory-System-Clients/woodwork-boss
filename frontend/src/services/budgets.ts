@@ -1,6 +1,7 @@
 import { ApiError, parseCollection, request, toNullableString } from "@/services/api";
 
 export type BudgetStatus = "draft" | "pending" | "approved" | "rejected";
+export type BudgetCategory = "arquitetonico" | "executivo";
 
 export interface BudgetMaterial {
   productId?: string;
@@ -13,10 +14,15 @@ export interface BudgetMaterial {
 export interface Budget {
   id: string;
   clientName: string;
+  category: BudgetCategory;
   description: string;
   status: BudgetStatus;
   deliveryDate: string | null;
   totalPrice: number;
+  totalCost?: number;
+  laborCost?: number;
+  profitMargin?: number;
+  profitValue?: number;
   notes: string | null;
   approvedAt: string | null;
   createdAt: string;
@@ -26,6 +32,7 @@ export interface Budget {
 
 export interface CreateBudgetInput {
   clientName: string;
+  category: BudgetCategory;
   description: string;
   deliveryDate: string | null;
   totalPrice: number;
@@ -92,6 +99,29 @@ const toNullableIsoString = (value: unknown) => {
 const toNumberSafe = (value: unknown, fallback = 0) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const toOptionalNumber = (value: unknown) => {
+  if (value === null || value === undefined || value === "") {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const toOptionalMargin = (value: unknown) => {
+  const numeric = toOptionalNumber(value);
+
+  if (numeric === undefined) {
+    return undefined;
+  }
+
+  if (numeric > 1 && numeric <= 100) {
+    return numeric / 100;
+  }
+
+  return numeric;
 };
 
 const mapApproveBudgetDetail = (value: unknown): ApproveBudgetStockDetail | null => {
@@ -196,6 +226,16 @@ const normalizeStatus = (value: unknown): BudgetStatus => {
   }
 };
 
+const normalizeCategory = (value: unknown): BudgetCategory => {
+  switch (value) {
+    case "arquitetonico":
+    case "executivo":
+      return value;
+    default:
+      return "arquitetonico";
+  }
+};
+
 const normalizeBudgetMaterial = (value: unknown): BudgetMaterial | null => {
   const item = toRecord(value);
 
@@ -234,14 +274,45 @@ const normalizeBudget = (value: unknown): Budget | null => {
   }
 
   const rawMaterials = Array.isArray(item.materials) ? item.materials : [];
+  const totalCost = toOptionalNumber(item.totalCost ?? item.total_cost ?? item.cost ?? item.cost_price);
+  const laborCost = toOptionalNumber(item.laborCost ?? item.labor_cost);
+  const profitMargin =
+    toOptionalMargin(
+      item.profitMargin ??
+        item.profit_margin ??
+        item.margin ??
+        item.marginPercent ??
+        item.margin_percent,
+    ) ??
+    (toRecord(item.financialSummary)
+      ? toOptionalMargin(
+          toRecord(item.financialSummary)?.profitMargin ??
+            toRecord(item.financialSummary)?.profit_margin ??
+            toRecord(item.financialSummary)?.margin,
+        )
+      : undefined);
+  const profitValue =
+    toOptionalNumber(item.profitValue ?? item.profit_value ?? item.profit) ??
+    (toRecord(item.financialSummary)
+      ? toOptionalNumber(
+          toRecord(item.financialSummary)?.profitValue ??
+            toRecord(item.financialSummary)?.profit_value ??
+            toRecord(item.financialSummary)?.profit,
+        )
+      : undefined);
 
   return {
     id,
     clientName: toStringSafe(item.clientName ?? item.client_name, "Cliente não informado"),
+    category: normalizeCategory(item.category),
     description: toStringSafe(item.description, ""),
     status: normalizeStatus(item.status),
     deliveryDate: toNullableIsoString(item.deliveryDate ?? item.delivery_date),
     totalPrice: toNumberSafe(item.totalPrice ?? item.total_price, 0),
+    totalCost,
+    laborCost,
+    profitMargin,
+    profitValue,
     notes: toNullableString(toStringSafe(item.notes, "")),
     approvedAt: toNullableIsoString(item.approvedAt ?? item.approved_at),
     createdAt: toStringSafe(item.createdAt ?? item.created_at, ""),
@@ -283,6 +354,10 @@ const toBudgetPayload = (input: CreateBudgetInput | UpdateBudgetInput, partial =
     payload.clientName = toStringSafe(input.clientName, "").trim();
   }
 
+  if (!partial || input.category !== undefined) {
+    payload.category = normalizeCategory(input.category);
+  }
+
   if (!partial || input.description !== undefined) {
     payload.description = toStringSafe(input.description, "").trim();
   }
@@ -316,8 +391,9 @@ const toBudgetPayload = (input: CreateBudgetInput | UpdateBudgetInput, partial =
   return payload;
 };
 
-export const listBudgets = async () => {
-  const payload = await request<unknown>("/budgets");
+export const listBudgets = async (category?: BudgetCategory) => {
+  const query = category ? `?category=${encodeURIComponent(category)}` : "";
+  const payload = await request<unknown>(`/budgets${query}`);
   const unwrapped = unwrapDataEnvelope(payload);
 
   if (Array.isArray(unwrapped)) {

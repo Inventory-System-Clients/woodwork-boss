@@ -237,15 +237,15 @@ const ProductsPage = () => {
       key: "stockAlert",
       header: "Situação",
       render: (item: Product) => {
-        const isLowStock = item.stockQuantity <= item.lowStockAlertQuantity;
+        const needsPurchase = item.stockQuantity <= 0;
 
         return (
           <span
             className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider ${
-              isLowStock ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"
+              needsPurchase ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"
             }`}
           >
-            {isLowStock ? "Baixo" : "OK"}
+            {needsPurchase ? "Precisa comprar" : "Em estoque"}
           </span>
         );
       },
@@ -354,7 +354,7 @@ const ProductsPage = () => {
                 : "Nenhum produto cadastrado no banco."
           }
           rowHighlight={(item: Product) =>
-            item.stockQuantity <= item.lowStockAlertQuantity
+            item.stockQuantity <= 0
               ? "border-l-2 border-l-destructive"
               : ""
           }
