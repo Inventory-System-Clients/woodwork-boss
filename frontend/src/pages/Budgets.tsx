@@ -1019,6 +1019,11 @@ const BudgetsPage = () => {
 
       if (shouldUseDetailCostsApplicableValue) {
         preApprovePayload.costsApplicableValue = Math.max(0, Number(detailForm.costsApplicableValue) || 0);
+      } else {
+        preApprovePayload.costsApplicableValue = Math.max(
+          0,
+          Number(selectedToPreApprove.costsApplicableValue) || 0,
+        );
       }
 
       const updated = mapBudgetFromApi(
@@ -2914,59 +2919,6 @@ const BudgetsPage = () => {
             )}
           </div>
 
-          <div>
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Custos aplicaveis</p>
-              <button
-                type="button"
-                onClick={addApplicableCost}
-                className="px-3 py-1 text-[11px] font-bold rounded border border-border hover:bg-secondary transition-colors text-foreground"
-              >
-                Adicionar custo
-              </button>
-            </div>
-
-            {form.applicableCosts.length === 0 ? (
-              <p className="text-xs text-muted-foreground">Nenhum custo aplicavel adicionado.</p>
-            ) : (
-              <div className="space-y-3">
-                {form.applicableCosts.map((cost, index) => (
-                  <div key={`applicable-create-${index}`} className="rounded border border-border p-3 space-y-3 bg-secondary/10">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <FormField
-                        label="Nome"
-                        value={cost.name}
-                        onChange={(event) => updateApplicableCostField(index, "name", event.target.value)}
-                        placeholder="Ex.: Frete especial"
-                        error={applicableCostsFieldErrors[`${index}-name`]}
-                      />
-
-                      <FormField
-                        label="Valor"
-                        type="number"
-                        min={0}
-                        step="0.01"
-                        value={cost.amount}
-                        onChange={(event) => updateApplicableCostField(index, "amount", Number(event.target.value))}
-                        error={applicableCostsFieldErrors[`${index}-amount`]}
-                      />
-                    </div>
-
-                    <div className="flex justify-end">
-                      <button
-                        type="button"
-                        onClick={() => removeApplicableCost(index)}
-                        className="px-3 py-1 text-[11px] font-bold rounded border border-border text-muted-foreground hover:text-destructive hover:border-destructive/40"
-                      >
-                        Remover custo
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <FormField
               label="Custo aplicavel (R$)"
@@ -3518,61 +3470,6 @@ const BudgetsPage = () => {
                               className="px-3 py-1 text-[11px] font-bold rounded border border-border text-muted-foreground hover:text-destructive hover:border-destructive/40"
                             >
                               Remover departamento
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="mt-6">
-                  <div className="mb-3 flex items-center justify-between gap-2">
-                    <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Custos aplicaveis</p>
-                    <button
-                      type="button"
-                      onClick={addDetailApplicableCost}
-                      className="px-3 py-1 text-[11px] font-bold rounded border border-border hover:bg-secondary transition-colors text-foreground"
-                    >
-                      Adicionar custo
-                    </button>
-                  </div>
-
-                  {detailForm.applicableCosts.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">Nenhum custo aplicavel adicionado.</p>
-                  ) : (
-                    <div className="space-y-3">
-                      {detailForm.applicableCosts.map((cost, index) => (
-                        <div key={`applicable-detail-${index}`} className="rounded border border-border p-3 space-y-3 bg-secondary/10">
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            <FormField
-                              label="Nome"
-                              value={cost.name}
-                              onChange={(event) => updateDetailApplicableCostField(index, "name", event.target.value)}
-                              placeholder="Ex.: Frete especial"
-                              error={detailApplicableCostsFieldErrors[`${index}-name`]}
-                            />
-
-                            <FormField
-                              label="Valor"
-                              type="number"
-                              min={0}
-                              step="0.01"
-                              value={cost.amount}
-                              onChange={(event) =>
-                                updateDetailApplicableCostField(index, "amount", Number(event.target.value))
-                              }
-                              error={detailApplicableCostsFieldErrors[`${index}-amount`]}
-                            />
-                          </div>
-
-                          <div className="flex justify-end">
-                            <button
-                              type="button"
-                              onClick={() => removeDetailApplicableCost(index)}
-                              className="px-3 py-1 text-[11px] font-bold rounded border border-border text-muted-foreground hover:text-destructive hover:border-destructive/40"
-                            >
-                              Remover custo
                             </button>
                           </div>
                         </div>
