@@ -10,11 +10,27 @@ export type ProductionStatus =
   | "approved"
   | "delivered";
 
+export interface ProductionStageStatus {
+  id: string;
+  stageId?: string;
+  stageName: string;
+  teamId: string;
+  teamName: string;
+  createdAt: string;
+}
+
+export interface ProductionStatusOption {
+  id: string;
+  name: string;
+  normalizedName: string;
+  usageCount: number;
+}
+
 export interface EmployeeProduction {
   id: string;
   clientName: string;
   description: string;
-  productionStatus: ProductionStatus;
+  productionStatus: string;
   deliveryDate: string;
   installationTeam: string;
   installationTeamId?: string;
@@ -22,6 +38,7 @@ export interface EmployeeProduction {
   budgetTotalPrice?: number;
   initialCost: number;
   materials: ProductionMaterial[];
+  statuses: ProductionStageStatus[];
 }
 
 export interface ProductionImage {
@@ -53,6 +70,22 @@ export interface CreateProductionInput {
   initialCost: number;
   materials: ProductionMaterial[];
 }
+
+export type AdvanceProductionStatusInput =
+  | {
+      stageId: string;
+      teamId: string;
+      stageName?: never;
+    }
+  | {
+      stageName: string;
+      teamId: string;
+      stageId?: never;
+    };
+
+export type ReplaceProductionStatusesInput = {
+  statuses: AdvanceProductionStatusInput[];
+};
 
 interface ListProductionsParams {
   employeeId?: string;
@@ -345,6 +378,26 @@ const sendAdvanceStatusRequest = async (productionId: string) => {
   });
 };
 
+const sendAdvanceStatusWithPayloadRequest = async (
+  productionId: string,
+  input: AdvanceProductionStatusInput,
+) => {
+  return request<unknown>(`/productions/${productionId}/advance-status`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+};
+
+const sendReplaceStatusesRequest = async (
+  productionId: string,
+  input: ReplaceProductionStatusesInput,
+) => {
+  return request<unknown>(`/productions/${productionId}/statuses`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+};
+
 const sendCreateShareLinkRequest = async (productionId: string) => {
   try {
     return await request<unknown>(`/productions/${productionId}/share-link`, {
@@ -401,6 +454,18 @@ const mapAdvanceProductionError = (error: ApiError) => {
   const details = extractStockDetails(error.payload);
 
   switch (error.status) {
+    case 401:
+      return new CompleteProductionError({
+        status: 401,
+        code: "unknown",
+        message: "Sessao expirada ou invalida. Faca login novamente.",
+      });
+    case 400:
+      return new CompleteProductionError({
+        status: 400,
+        code: "invalid_material_data",
+        message: "Etapa ou equipe invalida. Revise os dados e tente novamente.",
+      });
     case 403:
       return new CompleteProductionError({
         status: 403,
@@ -650,6 +715,58 @@ const mapMaterial = (value: unknown): ProductionMaterial | null => {
   };
 };
 
+const mapProductionStageStatus = (value: unknown): ProductionStageStatus | null => {
+  const item = toRecord(value);
+
+  if (!item) {
+    return null;
+  }
+
+  const id = toStringSafe(item.id, "").trim();
+  const stageName = toStringSafe(item.stageName ?? item.stage_name ?? item.name, "").trim();
+  const teamId = toStringSafe(item.teamId ?? item.team_id, "").trim();
+  const teamName = toStringSafe(item.teamName ?? item.team_name, "").trim();
+
+  if (!id || !stageName || !teamId) {
+    return null;
+  }
+
+  const stageId = toStringSafe(item.stageId ?? item.stage_id, "").trim();
+
+  return {
+    id,
+    stageId: stageId || undefined,
+    stageName,
+    teamId,
+    teamName: teamName || "Equipe nao informada",
+    createdAt: toStringSafe(item.createdAt ?? item.created_at, "").trim(),
+  };
+};
+
+const mapProductionStatusOption = (value: unknown): ProductionStatusOption | null => {
+  const item = toRecord(value);
+
+  if (!item) {
+    return null;
+  }
+
+  const id = toStringSafe(item.id, "").trim();
+  const name = toStringSafe(item.name, "").trim();
+
+  if (!id || !name) {
+    return null;
+  }
+
+  const normalizedName = toStringSafe(item.normalizedName ?? item.normalized_name, "").trim();
+
+  return {
+    id,
+    name,
+    normalizedName: normalizedName || name.toLowerCase(),
+    usageCount: toNumber(item.usageCount ?? item.usage_count),
+  };
+};
+
 const mapProduction = (value: unknown): EmployeeProduction | null => {
   if (!value || typeof value !== "object") {
     return null;
@@ -663,6 +780,7 @@ const mapProduction = (value: unknown): EmployeeProduction | null => {
   }
 
   const sourceMaterials = Array.isArray(item.materials) ? item.materials : [];
+  const sourceStatuses = Array.isArray(item.statuses) ? item.statuses : [];
 
   const rawInstallationTeam =
     item.installationTeam ??
@@ -706,7 +824,7 @@ const mapProduction = (value: unknown): EmployeeProduction | null => {
     id,
     clientName: toStringSafe(item.clientName ?? item.client_name, "Cliente não informado"),
     description: toStringSafe(item.description, ""),
-    productionStatus: normalizeStatus(item.productionStatus ?? item.production_status),
+    productionStatus: toStringSafe(item.productionStatus ?? item.production_status, "pending").trim() || "pending",
     deliveryDate: normalizeDeliveryDate(item.deliveryDate ?? item.delivery_date),
     installationTeam,
     installationTeamId: installationTeamId || undefined,
@@ -714,6 +832,9 @@ const mapProduction = (value: unknown): EmployeeProduction | null => {
     budgetTotalPrice: budgetTotalPrice === null ? undefined : budgetTotalPrice,
     initialCost: toNumber(item.initialCost ?? item.initial_cost),
     materials: sourceMaterials.map(mapMaterial).filter((material): material is ProductionMaterial => Boolean(material)),
+    statuses: sourceStatuses
+      .map(mapProductionStageStatus)
+      .filter((status): status is ProductionStageStatus => Boolean(status)),
   };
 };
 
@@ -776,6 +897,21 @@ export const listProductions = async (params?: ListProductionsParams) => {
 
 export const listProductionsByEmployee = async (employeeId: string) => {
   return listProductions({ employeeId });
+};
+
+export const listProductionStatusOptions = async () => {
+  const payload = await request<unknown>("/productions/status-options");
+  const data = unwrapDataEnvelope(payload);
+
+  if (Array.isArray(data)) {
+    return data
+      .map(mapProductionStatusOption)
+      .filter((item): item is ProductionStatusOption => Boolean(item));
+  }
+
+  return parseCollection<unknown>(payload)
+    .map(mapProductionStatusOption)
+    .filter((item): item is ProductionStatusOption => Boolean(item));
 };
 
 export const createProduction = async (input: CreateProductionInput) => {
@@ -1017,9 +1153,14 @@ export const getPublicProductionByToken = async (token: string) => {
 
 export const getSharedProductionSnapshot = getPublicProductionByToken;
 
-export const advanceProductionStatus = async (productionId: string) => {
+export const advanceProductionStatus = async (
+  productionId: string,
+  input?: AdvanceProductionStatusInput,
+) => {
   try {
-    const payload = await sendAdvanceStatusRequest(productionId);
+    const payload = input
+      ? await sendAdvanceStatusWithPayloadRequest(productionId, input)
+      : await sendAdvanceStatusRequest(productionId);
     return ensureProduction(payload, "Nao foi possivel avancar etapa da producao.");
   } catch (error) {
     if (error instanceof ApiError) {
@@ -1038,6 +1179,34 @@ export const advanceProductionStatus = async (productionId: string) => {
       status: 0,
       code: "unknown",
       message: "Falha inesperada ao avancar etapa da producao.",
+    });
+  }
+};
+
+export const replaceProductionStatuses = async (
+  productionId: string,
+  input: ReplaceProductionStatusesInput,
+) => {
+  try {
+    const payload = await sendReplaceStatusesRequest(productionId, input);
+    return ensureProduction(payload, "Nao foi possivel atualizar as etapas da producao.");
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw mapAdvanceProductionError(error);
+    }
+
+    if (error instanceof Error) {
+      throw new CompleteProductionError({
+        status: 0,
+        code: "unknown",
+        message: error.message,
+      });
+    }
+
+    throw new CompleteProductionError({
+      status: 0,
+      code: "unknown",
+      message: "Falha inesperada ao atualizar etapas da producao.",
     });
   }
 };

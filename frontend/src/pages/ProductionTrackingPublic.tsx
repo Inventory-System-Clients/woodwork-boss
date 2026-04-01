@@ -260,6 +260,17 @@ const ProductionTrackingPublicPage = () => {
       candidateUrls: buildImageCandidateUrls(normalizedToken, image),
     }));
   }, [data, normalizedToken]);
+  const orderedStatuses = useMemo(() => {
+    if (!data) {
+      return [];
+    }
+
+    return [...(data.statuses || [])].sort((a, b) => {
+      const left = new Date(a.createdAt || 0).getTime();
+      const right = new Date(b.createdAt || 0).getTime();
+      return left - right;
+    });
+  }, [data]);
 
   const loadSnapshot = async ({ refresh = false, silentError = false }: { refresh?: boolean; silentError?: boolean } = {}) => {
     if (!normalizedToken) {
@@ -388,6 +399,26 @@ const ProductionTrackingPublicPage = () => {
               <p className="mt-2 text-sm leading-relaxed text-foreground/90 whitespace-pre-wrap">
                 {data.description || "Sem descricao informada."}
               </p>
+            </div>
+
+            <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
+              <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Etapas em andamento</p>
+
+              {orderedStatuses.length === 0 ? (
+                <p className="mt-2 text-sm text-muted-foreground">Nenhuma etapa registrada ate o momento.</p>
+              ) : (
+                <ol className="mt-3 space-y-2">
+                  {orderedStatuses.map((status) => (
+                    <li key={status.id} className="rounded border border-border bg-secondary/20 px-3 py-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-foreground">{status.stageName}</p>
+                        <p className="text-xs text-muted-foreground">{formatDateTime(status.createdAt)}</p>
+                      </div>
+                      <p className="mt-1 text-xs text-foreground/80">Equipe: {status.teamName || "Nao informada"}</p>
+                    </li>
+                  ))}
+                </ol>
+              )}
             </div>
 
             <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
