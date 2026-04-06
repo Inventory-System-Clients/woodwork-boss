@@ -1,5 +1,7 @@
 import { parseCollection, request, toNullableString } from "@/services/api";
 
+export type TeamCategory = "interna" | "terceirizada";
+
 export interface TeamMember {
   employeeId: string;
   name: string;
@@ -12,6 +14,7 @@ export interface TeamMember {
 export interface Team {
   id: string;
   name: string;
+  category: TeamCategory;
   description: string | null;
   createdAt: string;
   updatedAt: string;
@@ -20,14 +23,24 @@ export interface Team {
 
 export interface CreateTeamInput {
   name: string;
+  category: TeamCategory;
   description: string | null;
   memberIds: string[];
 }
 
 export interface UpdateTeamInput {
   name?: string;
+  category?: TeamCategory;
   description?: string | null;
 }
+
+const normalizeCategory = (value: unknown): TeamCategory => {
+  if (value === "terceirizada") {
+    return "terceirizada";
+  }
+
+  return "interna";
+};
 
 const toStringOrNull = (value: unknown) => (typeof value === "string" ? value : null);
 
@@ -81,6 +94,7 @@ const normalizeTeam = (value: unknown): Team | null => {
   return {
     id,
     name,
+    category: normalizeCategory(item.category),
     description: toStringOrNull(item.description),
     createdAt: typeof item.createdAt === "string" ? item.createdAt : "",
     updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : "",
@@ -92,6 +106,7 @@ const parseTeamPayload = (payload: unknown) => normalizeTeam(payload);
 
 const toCreatePayload = (input: CreateTeamInput) => ({
   name: input.name.trim(),
+  category: normalizeCategory(input.category),
   description: toNullableString(input.description),
   memberIds: toEmployeeIds(input.memberIds),
 });
@@ -101,6 +116,10 @@ const toUpdatePayload = (input: UpdateTeamInput) => {
 
   if (input.name !== undefined) {
     payload.name = input.name.trim();
+  }
+
+  if (input.category !== undefined) {
+    payload.category = normalizeCategory(input.category);
   }
 
   if (input.description !== undefined) {

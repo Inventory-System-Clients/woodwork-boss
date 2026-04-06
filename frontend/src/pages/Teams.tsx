@@ -6,6 +6,7 @@ import { FormField } from "@/components/FormField";
 import { Employee, listEmployees } from "@/services/employees";
 import {
   Team,
+  TeamCategory,
   createTeam,
   deleteTeam,
   listTeams,
@@ -16,15 +17,20 @@ import { Pencil, Plus, Trash2, Users } from "lucide-react";
 
 interface TeamFormState {
   name: string;
+  category: TeamCategory;
   description: string;
   memberIds: string[];
 }
 
 const emptyForm: TeamFormState = {
   name: "",
+  category: "interna",
   description: "",
   memberIds: [],
 };
+
+const formatCategory = (category: TeamCategory) =>
+  category === "terceirizada" ? "Terceirizada" : "Interna";
 
 const toNullable = (value: string) => {
   const trimmed = value.trim();
@@ -67,6 +73,7 @@ const TeamsPage = () => {
 
   const [requestError, setRequestError] = useState("");
   const [formError, setFormError] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState<"all" | TeamCategory>("all");
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Team | null>(null);
@@ -75,6 +82,14 @@ const TeamsPage = () => {
   const employeesByName = useMemo(
     () => [...employees].sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
     [employees],
+  );
+
+  const filteredTeams = useMemo(
+    () =>
+      categoryFilter === "all"
+        ? teams
+        : teams.filter((team) => team.category === categoryFilter),
+    [teams, categoryFilter],
   );
 
   const loadData = async () => {
@@ -134,6 +149,7 @@ const TeamsPage = () => {
     setEditing(team);
     setForm({
       name: team.name,
+      category: team.category,
       description: team.description || "",
       memberIds: selectedIds,
     });
@@ -157,6 +173,11 @@ const TeamsPage = () => {
       return;
     }
 
+    if (!form.category) {
+      setFormError("Selecione a categoria da equipe.");
+      return;
+    }
+
     if (form.memberIds.length === 0) {
       setFormError("Selecione ao menos um funcionário para montar a equipe.");
       return;
@@ -169,6 +190,7 @@ const TeamsPage = () => {
       if (editing) {
         await updateTeam(editing.id, {
           name: form.name,
+          category: form.category,
           description: toNullable(form.description),
         });
 
@@ -176,6 +198,7 @@ const TeamsPage = () => {
       } else {
         await createTeam({
           name: form.name,
+          category: form.category,
           description: toNullable(form.description),
           memberIds: form.memberIds,
         });
@@ -214,6 +237,21 @@ const TeamsPage = () => {
 
   const columns = [
     { key: "name", header: "Equipe" },
+    {
+      key: "category",
+      header: "Categoria",
+      render: (item: Team) => (
+        <span
+          className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider ${
+            item.category === "terceirizada"
+              ? "bg-blue-500/20 text-blue-300"
+              : "bg-success/20 text-success"
+          }`}
+        >
+          {formatCategory(item.category)}
+        </span>
+      ),
+    },
     { key: "description", header: "Descrição", render: (item: Team) => item.description || "-" },
     {
       key: "membersCount",
@@ -302,9 +340,23 @@ const TeamsPage = () => {
           </div>
         </div>
 
+        <div className="w-full md:w-72">
+          <FormField
+            label="Filtrar por categoria"
+            as="select"
+            value={categoryFilter}
+            onChange={(event) => setCategoryFilter(event.target.value as "all" | TeamCategory)}
+            options={[
+              { value: "all", label: "Todas" },
+              { value: "interna", label: "Internas" },
+              { value: "terceirizada", label: "Terceirizadas" },
+            ]}
+          />
+        </div>
+
         <DataTable
           columns={columns}
-          data={teams}
+          data={filteredTeams}
           emptyMessage={isLoading ? "Carregando equipes..." : "Nenhuma equipe cadastrada."}
         />
       </div>
@@ -323,6 +375,21 @@ const TeamsPage = () => {
               onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
               placeholder="Ex.: Equipe Alfa"
             />
+            <FormField
+              label="Categoria"
+              as="select"
+              value={form.category}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, category: event.target.value as TeamCategory }))
+              }
+              options={[
+                { value: "interna", label: "Interna" },
+                { value: "terceirizada", label: "Terceirizada" },
+              ]}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <FormField
               label="Descrição"
               value={form.description}

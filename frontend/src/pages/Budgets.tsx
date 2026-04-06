@@ -39,8 +39,6 @@ const formatCurrency = (value: number) =>
     currency: "BRL",
   });
 
-const formatPercent = (value: number) => `${(value * 100).toFixed(0)}%`;
-
 const formatStatus = (status: BudgetRow["status"]) => {
   switch (status) {
     case "draft":
@@ -120,9 +118,57 @@ const loadImageDataUrl = async (imagePath: string) => {
 
 const loadLogoDataUrl = async () => loadImageDataUrl("/image.png");
 
-const loadContractTopBannerDataUrl = async () => loadImageDataUrl("/partecima.png");
+type ProposalSectionLine = {
+  text: string;
+  indentLevel: number;
+};
 
-const loadContractBottomBannerDataUrl = async () => loadImageDataUrl("/partebaixo_.png");
+const PROPOSAL_DESCRIPTION_PLACEHOLDER = [
+  "Arquitetura:",
+  "  - Projeto conforme layout aprovado.",
+  "  - A.R.T do sistema de deteccao de incendio.",
+  "  - Compatibilizacao com projeto eletrico.",
+].join("\n");
+
+const PROPOSAL_NOTES_PLACEHOLDER = [
+  "Alvenaria:",
+  "  - Demolicao completa do forro existente.",
+  "  - Instalacao de forro drywall novo.",
+  "  - Pintura final conforme projeto aprovado.",
+].join("\n");
+
+const DEFAULT_ARCHITECTURE_LINES: ProposalSectionLine[] = [
+  { text: "Projeto ou laudo conforme layout aprovado.", indentLevel: 0 },
+  { text: "A.R.T. do sistema e da execucao da obra.", indentLevel: 0 },
+  { text: "Projeto eletrico e compatibilizacao tecnica.", indentLevel: 0 },
+  { text: "Alinhamento final com comunicacao visual.", indentLevel: 0 },
+];
+
+const DEFAULT_ALVENARIA_LINES: ProposalSectionLine[] = [
+  { text: "Demolicao e preparacao da area existente.", indentLevel: 0 },
+  { text: "Instalacoes de base conforme projeto executivo.", indentLevel: 0 },
+  { text: "Acabamentos finais de acordo com a aprovacao do cliente.", indentLevel: 0 },
+];
+
+const parseProposalSectionLines = (
+  value: string | null | undefined,
+  fallback: ProposalSectionLine[],
+): ProposalSectionLine[] => {
+  const parsed = (value || "")
+    .split(/\r?\n/)
+    .map((line) => {
+      const leadingSpaces = line.match(/^\s*/)?.[0].length || 0;
+      const indentLevel = Math.min(3, Math.floor(leadingSpaces / 2));
+      const text = line.trim().replace(/^[-*•]\s*/, "");
+      return {
+        text,
+        indentLevel,
+      };
+    })
+    .filter((line) => line.text.length > 0);
+
+  return parsed.length > 0 ? parsed : fallback;
+};
 
 interface BudgetItemRow {
   productId?: string;
@@ -2048,129 +2094,127 @@ const BudgetsPage = () => {
       const pdf = new jsPDF({ unit: "mm", format: "a4" });
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
-      const marginX = 14;
-      const contentWidth = pageWidth - marginX * 2;
+      const contentWidth = 154;
+      const marginX = (pageWidth - contentWidth) / 2;
+      const bottomLimit = pageHeight - 16;
 
-      let y = 16;
-
+      let y = 12;
       const logoDataUrl = await loadLogoDataUrl();
       if (logoDataUrl) {
-        pdf.addImage(logoDataUrl, "PNG", marginX, y - 3, 14, 14);
+        pdf.addImage(logoDataUrl, "PNG", marginX, y, 30, 30);
       }
 
-      pdf.setTextColor(166, 124, 0);
+      const headerX = logoDataUrl ? marginX + 36 : marginX;
+      pdf.setTextColor(0, 0, 0);
       pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(20);
-      pdf.text("Mais Quioque", logoDataUrl ? marginX + 18 : marginX, y + 5);
+      pdf.setFontSize(15);
+      pdf.text("Mais Quiosque Galpao Producao", headerX, y + 8);
 
-      pdf.setTextColor(90, 90, 90);
       pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(10);
-      pdf.text("Proposta comercial para cliente", logoDataUrl ? marginX + 18 : marginX, y + 10);
+      pdf.setFontSize(9.8);
+      pdf.text("Rua Professor Athanassof, 28 Cid.Patriarca", headerX, y + 15);
+      pdf.text("CEP 03552-110 Sao Paulo - SP", headerX, y + 20);
 
-      y += 16;
-      pdf.setDrawColor(210, 210, 210);
-      pdf.line(marginX, y, pageWidth - marginX, y);
+      y += 36;
 
-      y += 8;
-      pdf.setTextColor(30, 30, 30);
+      const issueDate = normalizeDateOnly(budget.createdAt) || "-";
+      const proposalTitle = `Proposta comercial: ${budget.clientName}`;
+      const proposalSubtitle = "Desenvolvimento, construcao e montagem de loja conforme projeto enviado previamente.";
+
       pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(12);
-      pdf.text(`Orçamento #${budget.id}`, marginX, y);
+      pdf.setFontSize(9.5);
+      pdf.text(proposalTitle, marginX, y);
 
-      y += 6;
+      y += 4.5;
       pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(10);
-      pdf.text(`Cliente: ${budget.clientName}`, marginX, y);
+      pdf.setFontSize(8.5);
+      const subtitleLines = pdf.splitTextToSize(proposalSubtitle, contentWidth);
+      pdf.text(subtitleLines, marginX, y);
+      y += subtitleLines.length * 3.8 + 3;
 
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(8);
+      pdf.text(`Data de emissao: ${issueDate}`, marginX, y);
       y += 5;
-      pdf.text(`Data de emissão: ${budget.createdAt}`, marginX, y);
 
-      y += 5;
-      pdf.text(`Status: ${formatStatus(budget.status)}`, marginX, y);
-
-      y += 10;
-      pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(11);
-      pdf.text("Itens do orçamento", marginX, y);
-
-      y += 5;
-      const drawItemsHeader = () => {
-        pdf.setFont("helvetica", "bold");
-        pdf.setFontSize(9);
-        pdf.setDrawColor(190, 190, 190);
-        pdf.rect(marginX, y, contentWidth, 7);
-        pdf.text("Item", marginX + 2, y + 4.6);
-        pdf.text("Qtd.", 114, y + 4.6, { align: "right" });
-        pdf.text("Valor Unit.", 148, y + 4.6, { align: "right" });
-        pdf.text("Subtotal", pageWidth - marginX - 2, y + 4.6, { align: "right" });
-        y += 7;
-      };
-
-      drawItemsHeader();
-
-      for (const item of budget.items) {
-        const itemLines = pdf.splitTextToSize(item.productName, 86);
-        const rowHeight = Math.max(7, itemLines.length * 4.5 + 2.5);
-
-        if (y + rowHeight > pageHeight - 38) {
-          pdf.addPage();
-          y = 20;
-          drawItemsHeader();
+      const ensureSpace = (neededHeight: number) => {
+        if (y + neededHeight <= bottomLimit) {
+          return;
         }
 
-        pdf.setFont("helvetica", "normal");
-        pdf.setFontSize(9);
-        pdf.rect(marginX, y, contentWidth, rowHeight);
-        pdf.text(itemLines, marginX + 2, y + 4.2);
-        pdf.text(String(item.quantity), 114, y + 4.2, { align: "right" });
-        pdf.text(formatCurrency(item.unitPrice), 148, y + 4.2, { align: "right" });
-        pdf.text(formatCurrency(item.subtotal), pageWidth - marginX - 2, y + 4.2, { align: "right" });
-
-        y += rowHeight;
-      }
-
-      y += 8;
-      const summaryWidth = 78;
-      const summaryHeight = 46;
-      const summaryX = pageWidth - marginX - summaryWidth;
-
-      if (y + summaryHeight > pageHeight - 18) {
         pdf.addPage();
-        y = 20;
-      }
+        y = 14;
+      };
 
-      pdf.setDrawColor(190, 190, 190);
-      pdf.rect(summaryX, y, summaryWidth, summaryHeight);
-      pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(9);
+      const writeSectionTitle = (title: string) => {
+        ensureSpace(8);
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(9.5);
+        pdf.text(title, marginX + 4, y);
+        y += 4.5;
+      };
 
-      const summaryRows: Array<[string, string]> = [
-        ["Materiais", formatCurrency(budget.materialCost)],
-        ["Deptos. gasto", formatCurrency(budget.expenseDepartmentsCost)],
-        ["Custos aplic.", formatCurrency(budget.costsApplicableValue)],
-        ["Mão de obra", formatCurrency(budget.laborCost)],
-        ["Custo total", formatCurrency(budget.totalCost)],
-        ["Margem", formatPercent(budget.profitMargin)],
-      ];
+      const writeBulletLine = (line: ProposalSectionLine) => {
+        const bulletX = marginX + 4 + line.indentLevel * 4;
+        const textX = bulletX + 3;
+        const wrapped = pdf.splitTextToSize(line.text, contentWidth - (textX - marginX) - 2) as string[];
+        const blockHeight = Math.max(4.2, wrapped.length * 3.8 + 0.8);
+        ensureSpace(blockHeight + 0.8);
 
-      let summaryY = y + 6;
-      summaryRows.forEach(([label, value]) => {
-        pdf.setTextColor(50, 50, 50);
-        pdf.text(label, summaryX + 2, summaryY);
-        pdf.text(value, summaryX + summaryWidth - 2, summaryY, { align: "right" });
-        summaryY += 6;
-      });
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(8.3);
+        pdf.text("•", bulletX, y);
+        pdf.text(wrapped, textX, y);
+        y += blockHeight;
+      };
 
-      pdf.setTextColor(166, 124, 0);
+      const architectureLines = parseProposalSectionLines(budget.description, DEFAULT_ARCHITECTURE_LINES);
+      const alvenariaLines = parseProposalSectionLines(budget.notes, DEFAULT_ALVENARIA_LINES);
+
+      writeSectionTitle("Arquitetura:");
+      architectureLines.forEach(writeBulletLine);
+
+      y += 2;
+      writeSectionTitle("Alvenaria:");
+      alvenariaLines.forEach(writeBulletLine);
+
+      y += 4;
+      ensureSpace(40);
+
       pdf.setFont("helvetica", "bold");
-      pdf.text("Preço final", summaryX + 2, summaryY);
-      pdf.text(formatCurrency(budget.finalPrice), summaryX + summaryWidth - 2, summaryY, { align: "right" });
+      pdf.setFontSize(8.8);
+      pdf.text(`Valor unitario: ${formatCurrency(budget.finalPrice)}`, marginX, y);
+
+      y += 5;
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(8);
+      const paymentLines = pdf.splitTextToSize(
+        "Pagamento: 50% fechamento e assinatura de contrato 50% restante a serem pagos 30 dias apos inicio da obra. Prazo de entrega da obra 60 dias. Proposta valida por 5 dias.",
+        contentWidth,
+      ) as string[];
+      pdf.text(paymentLines, marginX, y);
+      y += paymentLines.length * 3.8 + 2.5;
 
       pdf.setFont("helvetica", "normal");
-      pdf.setTextColor(110, 110, 110);
-      pdf.setFontSize(8);
-      pdf.text("Documento gerado automaticamente pelo sistema Mais Quioque.", marginX, pageHeight - 10);
+      pdf.setFontSize(7.7);
+      const disclaimer = pdf.splitTextToSize(
+        "Este e um orcamento previo, podem haver mudancas de valores caso no ato do projeto seja aprovado itens nao inclusos neste orcamento.",
+        contentWidth,
+      ) as string[];
+      pdf.text(disclaimer, marginX, y);
+      y += disclaimer.length * 3.6 + 4;
+
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(8.5);
+      pdf.text("Atenciosamente,", marginX, y);
+      y += 4;
+      pdf.text("Claudinei Cosso", marginX, y);
+      y += 4;
+      pdf.text("Executivo Comercial", marginX, y);
+      y += 4;
+      pdf.text("+55 11 98327 0902", marginX, y);
+      y += 4;
+      pdf.text("Escritorio: Av Cochoeiro Paulista, 17 Cidade Patriarca Cep 03551-000 Sao Paulo - SP", marginX, y);
 
       const safeClientName = sanitizeFileName(budget.clientName) || "cliente";
       pdf.save(`orcamento-${budget.id}-${safeClientName}.pdf`);
@@ -2233,46 +2277,15 @@ const BudgetsPage = () => {
       const pdf = new jsPDF({ unit: "mm", format: "a4" });
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
-      const marginX = 14;
-      const contentWidth = pageWidth - marginX * 2;
-      const bottomMargin = 10;
+      const contentWidth = 162;
+      const marginX = (pageWidth - contentWidth) / 2;
+      const bottomLimit = pageHeight - 18;
+      const lineHeight = 4.3;
 
-      const lineHeightFor = (fontSize: number) => Number((fontSize * 0.45).toFixed(2));
-
-      const resolveBannerHeight = (
-        bannerDataUrl: string | null,
-        minHeight: number,
-        maxHeight: number,
-      ) => {
-        if (!bannerDataUrl) {
-          return 0;
-        }
-
-        try {
-          const properties = pdf.getImageProperties(bannerDataUrl);
-          const ratio = properties.height / properties.width;
-          const suggestedHeight = pageWidth * ratio;
-          return Math.min(maxHeight, Math.max(minHeight, Number(suggestedHeight.toFixed(2))));
-        } catch {
-          return minHeight;
-        }
-      };
-
-      const topBannerDataUrl = await loadContractTopBannerDataUrl();
-      const bottomBannerDataUrl = await loadContractBottomBannerDataUrl();
-      const topBannerHeight = resolveBannerHeight(topBannerDataUrl, 26, 62);
-      const bottomBannerHeight = resolveBannerHeight(bottomBannerDataUrl, 18, 46);
-      const reservedBottomDecoration = bottomBannerDataUrl ? bottomBannerHeight + 3 : 0;
-      const contentBottomLimit = pageHeight - bottomMargin - reservedBottomDecoration;
-
-      if (topBannerDataUrl) {
-        pdf.addImage(topBannerDataUrl, "PNG", 0, 0, pageWidth, topBannerHeight);
-      }
-
-      let y = topBannerDataUrl ? topBannerHeight + 8 : 16;
+      let y = 14;
 
       const ensureSpace = (requiredHeight: number) => {
-        if (y + requiredHeight <= contentBottomLimit) {
+        if (y + requiredHeight <= bottomLimit) {
           return;
         }
 
@@ -2280,156 +2293,138 @@ const BudgetsPage = () => {
         y = 16;
       };
 
-      const writeParagraph = (
-        text: string,
-        options: {
-          fontStyle?: "normal" | "bold";
-          fontSize?: number;
-          marginBottom?: number;
-        } = {},
-      ) => {
-        const { fontStyle = "normal", fontSize = 10, marginBottom = 1.6 } = options;
-        const lines = pdf.splitTextToSize(text, contentWidth) as string[];
-        const lineHeight = lineHeightFor(fontSize);
-        const blockHeight = Math.max(lineHeight, lines.length * lineHeight);
-
-        ensureSpace(blockHeight + marginBottom);
-
-        pdf.setFont("helvetica", fontStyle);
-        pdf.setFontSize(fontSize);
-        pdf.text(lines, marginX, y);
-        y += blockHeight + marginBottom;
+      const writeLine = (text: string, opts: { bold?: boolean; size?: number; indent?: number } = {}) => {
+        const { bold = false, size = 10, indent = 0 } = opts;
+        const x = marginX + indent;
+        const wrapped = pdf.splitTextToSize(text, contentWidth - indent) as string[];
+        ensureSpace(wrapped.length * lineHeight + 1);
+        pdf.setFont("helvetica", bold ? "bold" : "normal");
+        pdf.setFontSize(size);
+        pdf.text(wrapped, x, y);
+        y += wrapped.length * lineHeight;
       };
 
-      const writeSectionTitle = (title: string) => {
-        y += 1;
-        writeParagraph(title, { fontStyle: "bold", fontSize: 11, marginBottom: 2 });
+      const addGap = (value = 2) => {
+        y += value;
       };
 
-      const writeTextBlock = (text: string, marginBottom = 2) => {
-        const lines = text.split("\n");
+      const separator = () => {
+        ensureSpace(4);
+        pdf.setDrawColor(0, 0, 0);
+        pdf.setLineWidth(0.8);
+        pdf.line(marginX, y, marginX + contentWidth, y);
+        y += 5;
+      };
 
-        lines.forEach((rawLine, index) => {
+      const logoDataUrl = await loadLogoDataUrl();
+      const logoMaxW = 34;
+      const logoMaxH = 24;
+      let logoW = logoMaxW;
+      let logoH = logoMaxH;
+
+      if (logoDataUrl) {
+        try {
+          const logoProps = pdf.getImageProperties(logoDataUrl);
+          const ratio = logoProps.width / logoProps.height;
+
+          logoW = logoMaxW;
+          logoH = logoW / ratio;
+
+          if (logoH > logoMaxH) {
+            logoH = logoMaxH;
+            logoW = logoH * ratio;
+          }
+        } catch {
+          logoW = logoMaxW;
+          logoH = logoMaxH;
+        }
+
+        pdf.addImage(logoDataUrl, "PNG", marginX, y, logoW, logoH);
+      }
+
+      const titleX = marginX + logoW + 8;
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(10.8);
+      pdf.text("CONTRATO DE PRESTACAO DE SERVICOS", titleX, y + 8);
+      pdf.text("DE MONTAGEM DE QUIOSQUE COMERCIAL", titleX, y + 14);
+
+      y += logoH + 6;
+      separator();
+
+      writeLine(`CONTRATANTE: ${contractForm.contratanteName}, inscrita no CPF/CNPJ sob n.o ____________, residente na cidade de ____________, doravante denominada simplesmente CONTRATANTE.`, { bold: true });
+      addGap(2);
+      separator();
+
+      writeLine("CONTRATADA: GIRA KIDS COMERCIO DE DOCES, BRINQUEDOS E JOGOS ELETRONICOS LTDA, pessoa juridica de direito privado, inscrita no CNPJ sob o n.o 07.313.928/0001-75, com sede na Avenida Cachoeira Paulista, 17 - Cidade Patriarca - Cep: 03551-000, doravante denominada simplesmente CONTRATADA.", { bold: true });
+      addGap(2);
+      separator();
+
+      writeLine("Considerando que:", { bold: true });
+      addGap(1);
+      writeLine("a) A CONTRATANTE deseja contratar os servicos da CONTRATADA para desenvolvimento, construcao e montagem de loja, conforme especificacoes deste instrumento.", { indent: 1 });
+      addGap(1);
+      writeLine("b) A CONTRATADA declara possuir expertise e capacidade tecnica para a execucao dos servicos ora contratados.", { indent: 1 });
+      addGap(2);
+
+      writeLine("As partes acima identificadas tem entre si justo e acordado o presente Contrato de Construcao e Montagem de Loja, mediante as seguintes clausulas e condicoes:");
+      addGap(2);
+
+      contractForm.clauses.forEach((clause, index) => {
+        const clauseTitle = clause.title.trim() || `Clausula ${index + 1}`;
+        writeLine(clauseTitle, { bold: true, size: 11 });
+        addGap(1);
+
+        const processedContent = replaceContractPlaceholders(clause.content, contractForm.contractValue);
+        const contentLines = processedContent.split(/\r?\n/);
+
+        contentLines.forEach((rawLine) => {
           const line = rawLine.trim();
 
           if (!line) {
-            y += 1;
+            addGap(1);
             return;
           }
 
-          if (/^[-•]\s+/.test(line)) {
-            writeBullet(line.replace(/^[-•]\s+/, ""));
+          if (/^[-*•]/.test(line)) {
+            writeLine(`• ${line.replace(/^[-*•]\s*/, "")}`, { indent: 3.5 });
             return;
           }
 
-          writeParagraph(line, {
-            marginBottom: index === lines.length - 1 ? marginBottom : 1,
-          });
-        });
-      };
-
-      const writeBullet = (text: string) => {
-        const fontSize = 10;
-        const lineHeight = lineHeightFor(fontSize);
-        const lines = pdf.splitTextToSize(text, contentWidth - 9) as string[];
-        const blockHeight = Math.max(lineHeight, lines.length * lineHeight) + 1;
-
-        ensureSpace(blockHeight);
-
-        pdf.setFont("helvetica", "normal");
-        pdf.setFontSize(fontSize);
-
-        lines.forEach((line, index) => {
-          const prefix = index === 0 ? "• " : "";
-          const x = index === 0 ? marginX + 1 : marginX + 6;
-          pdf.text(`${prefix}${line}`, x, y + index * lineHeight);
+          writeLine(line, { indent: 1.2 });
         });
 
-        y += lines.length * lineHeight + 1;
-      };
-
-      pdf.setTextColor(35, 35, 35);
-      writeParagraph("CONTRATO DE PRESTACAO DE SERVICOS", { fontStyle: "bold", fontSize: 12, marginBottom: 2.4 });
-
-      writeParagraph(
-        `Direcionada a desenvolvimento, criação e montagem de quiosque medindo ${contractForm.kioskWidthMeters}x${contractForm.kioskDepthMeters} metros destinado ao cliente ${contractForm.operationName}.`,
-        { marginBottom: 2.5 },
-      );
-
-      y += 1;
-      writeParagraph("CONTRATADA:", { fontStyle: "bold", marginBottom: 1.2 });
-      writeParagraph(
-        "MAIS QUIOSQUE, situada na Rua Professor Athanassof, 28 - Cidade Patriarca - São Paulo/SP, inscrita no CNPJ nº 07.313.928/0001-75 (Gira Kids),",
-        { marginBottom: 1 },
-      );
-      writeParagraph("E-mail: maisquiosque@hotmail.com", { marginBottom: 1 });
-      writeParagraph("Telefone: +55 11 98327-0902", { marginBottom: 2.2 });
-
-      writeParagraph(`CONTRATANTE: ${contractForm.contratanteName}`, {
-        fontStyle: "bold",
-        marginBottom: 2.2,
-      });
-
-      writeParagraph(
-        "As partes acima identificadas acordam a presente Proposta Comercial de Prestação de Serviços, que será regida pelas cláusulas a seguir:",
-        { marginBottom: 2.2 },
-      );
-
-      contractForm.clauses.forEach((clause, index) => {
-        writeSectionTitle(clause.title.trim());
-        writeTextBlock(
-          replaceContractPlaceholders(clause.content, contractForm.contractValue),
-          index === contractForm.clauses.length - 1 ? 2.5 : 2,
-        );
+        addGap(2);
       });
 
       if (contractForm.projectAddress.trim()) {
-        writeParagraph(`Endereço da obra: ${contractForm.projectAddress.trim()}`, {
-          fontStyle: "bold",
-          marginBottom: 3,
-        });
+        writeLine(`Endereco da obra: ${contractForm.projectAddress.trim()}`, { bold: true });
+        addGap(2);
       }
 
-      const dateFontSize = 10;
-      const dateMarginBottom = 8;
-      const signatureOffsetAfterDate = 8;
-      const signatureBottomOffset = 15;
-      const signatureSectionHeight =
-        lineHeightFor(dateFontSize) + dateMarginBottom + signatureOffsetAfterDate + signatureBottomOffset;
-      const footerTopY = bottomBannerDataUrl ? pageHeight - bottomBannerHeight : pageHeight - bottomMargin;
-      const signatureGapToFooter = 3;
+      writeLine(
+        `${contractForm.signatureCity}, ${formatLongDate(contractForm.signatureDate)}.`,
+        { size: 10.5 },
+      );
+      addGap(9);
 
-      ensureSpace(signatureSectionHeight + 1);
-
-      const targetSignatureStartY = footerTopY - signatureGapToFooter - signatureSectionHeight;
-      if (targetSignatureStartY > y) {
-        y = targetSignatureStartY;
-      }
-
-      writeParagraph(`${contractForm.signatureCity}, ${formatLongDate(contractForm.signatureDate)}.`, { marginBottom: 8 });
-
-      const signatureLineWidth = 74;
+      ensureSpace(24);
+      const signatureLineWidth = 72;
       const leftSignatureX = marginX;
-      const rightSignatureX = pageWidth - marginX - signatureLineWidth;
-      const lineY = y + signatureOffsetAfterDate;
+      const rightSignatureX = marginX + contentWidth - signatureLineWidth;
 
-      pdf.setDrawColor(140, 140, 140);
-      pdf.line(leftSignatureX, lineY, leftSignatureX + signatureLineWidth, lineY);
-      pdf.line(rightSignatureX, lineY, rightSignatureX + signatureLineWidth, lineY);
+      pdf.setDrawColor(0, 0, 0);
+      pdf.setLineWidth(0.35);
+      pdf.line(leftSignatureX, y, leftSignatureX + signatureLineWidth, y);
+      pdf.line(rightSignatureX, y, rightSignatureX + signatureLineWidth, y);
 
+      y += 5;
       pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(10);
-      pdf.setTextColor(30, 30, 30);
-      pdf.text(contractForm.contratanteName, leftSignatureX, lineY + 5);
-      pdf.text("Contratante", leftSignatureX, lineY + 10);
+      pdf.setFontSize(9.2);
+      pdf.text(contractForm.contratanteName, leftSignatureX, y);
+      pdf.text("CONTRATANTE", leftSignatureX, y + 4.2);
 
-      pdf.text("Daniel De Souza", rightSignatureX, lineY + 5);
-      pdf.text("Executivo Comercial - Mais Quiosque", rightSignatureX, lineY + 10);
-      pdf.text("Contratada", rightSignatureX, lineY + 15);
-
-      if (bottomBannerDataUrl) {
-        pdf.addImage(bottomBannerDataUrl, "PNG", 0, pageHeight - bottomBannerHeight, pageWidth, bottomBannerHeight);
-      }
+      pdf.text("GIRA KIDS COMERCIO DE DOCES", rightSignatureX, y);
+      pdf.text("CONTRATADA", rightSignatureX, y + 4.2);
 
       const safeClientName = sanitizeFileName(contractForm.operationName || selectedBudgetForContract.clientName) || "cliente";
       pdf.save(`contrato-${selectedBudgetForContract.id}-${safeClientName}.pdf`);
@@ -2676,7 +2671,7 @@ const BudgetsPage = () => {
             as="textarea"
             value={form.description}
             onChange={(e) => setForm({ ...form, description: e.target.value })}
-            placeholder="Descreva o orçamento"
+            placeholder={PROPOSAL_DESCRIPTION_PLACEHOLDER}
           />
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -2688,9 +2683,10 @@ const BudgetsPage = () => {
             />
             <FormField
               label="Observações"
+              as="textarea"
               value={form.notes}
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              placeholder="Opcional"
+              placeholder={PROPOSAL_NOTES_PLACEHOLDER}
             />
           </div>
 
@@ -3225,6 +3221,7 @@ const BudgetsPage = () => {
               as="textarea"
               value={detailForm.description}
               onChange={(e) => setDetailForm((current) => ({ ...current, description: e.target.value }))}
+              placeholder={PROPOSAL_DESCRIPTION_PLACEHOLDER}
             />
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -3510,6 +3507,7 @@ const BudgetsPage = () => {
               as="textarea"
               value={detailForm.notes}
               onChange={(e) => setDetailForm((current) => ({ ...current, notes: e.target.value }))}
+              placeholder={PROPOSAL_NOTES_PLACEHOLDER}
             />
 
             <div className="flex justify-end gap-3">
