@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { DashboardLayout } from "@/layouts/DashboardLayout";
 import { DataTable } from "@/components/DataTable";
+import { FormField } from "@/components/FormField";
 import { StatusBadge } from "@/components/StatusBadge";
 import { listBudgets, type Budget } from "@/services/budgets";
 import { listProductions, EmployeeProduction } from "@/services/productions";
@@ -239,6 +240,8 @@ const getMonthReference = (deliveryDate: string) => {
 const LogisticsPage = () => {
   const [productions, setProductions] = useState<EmployeeProduction[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
+  const [filterDateStart, setFilterDateStart] = useState("");
+  const [filterDateEnd, setFilterDateEnd] = useState("");
   const [teamCount, setTeamCount] = useState(0);
   const [activeEmployeesCount, setActiveEmployeesCount] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -305,9 +308,50 @@ const LogisticsPage = () => {
     void loadLogisticsData();
   }, []);
 
+  const parsedFilterStart = useMemo(() => parseDateAtMidnight(filterDateStart), [filterDateStart]);
+  const parsedFilterEnd = useMemo(() => parseDateAtMidnight(filterDateEnd), [filterDateEnd]);
+
+  const hasInvalidDateRange = Boolean(
+    parsedFilterStart && parsedFilterEnd && parsedFilterStart.getTime() > parsedFilterEnd.getTime(),
+  );
+
+  const isDateInSelectedRange = (value: string | null | undefined) => {
+    if (!parsedFilterStart && !parsedFilterEnd) {
+      return true;
+    }
+
+    const parsedValue = parseDateAtMidnight(value || "");
+
+    if (!parsedValue) {
+      return false;
+    }
+
+    if (parsedFilterStart && parsedValue.getTime() < parsedFilterStart.getTime()) {
+      return false;
+    }
+
+    if (parsedFilterEnd && parsedValue.getTime() > parsedFilterEnd.getTime()) {
+      return false;
+    }
+
+    return true;
+  };
+
+  const filteredProductions = useMemo(
+    () =>
+      productions.filter((item) => {
+        if (hasInvalidDateRange) {
+          return false;
+        }
+
+        return isDateInSelectedRange(item.deliveryDate);
+      }),
+    [productions, hasInvalidDateRange, parsedFilterStart, parsedFilterEnd],
+  );
+
   const activeProductions = useMemo(
-    () => productions.filter((item) => !isFinalizedProduction(item.productionStatus)),
-    [productions],
+    () => filteredProductions.filter((item) => !isFinalizedProduction(item.productionStatus)),
+    [filteredProductions],
   );
 
   const activeProductionRows = useMemo<LogisticsProductionRow[]>(
@@ -345,8 +389,19 @@ const LogisticsPage = () => {
   );
 
   const approvedBudgets = useMemo(
-    () => budgets.filter((budget) => budget.status === "approved"),
-    [budgets],
+    () =>
+      budgets.filter((budget) => {
+        if (budget.status !== "approved") {
+          return false;
+        }
+
+        if (hasInvalidDateRange) {
+          return false;
+        }
+
+        return isDateInSelectedRange(getApprovedReferenceDate(budget));
+      }),
+    [budgets, hasInvalidDateRange, parsedFilterStart, parsedFilterEnd],
   );
 
   const { financialRows, budgetsWithoutMarginCount } = useMemo(() => {
@@ -554,6 +609,42 @@ const LogisticsPage = () => {
   return (
     <DashboardLayout title="Logística" subtitle="Entregas e Instalação">
       <div className="animate-fade-in space-y-8">
+        <div className="rounded border border-border bg-card p-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+            <FormField
+              label="Data inicial"
+              type="date"
+              value={filterDateStart}
+              onChange={(event) => setFilterDateStart(event.target.value)}
+            />
+            <FormField
+              label="Data final"
+              type="date"
+              value={filterDateEnd}
+              onChange={(event) => setFilterDateEnd(event.target.value)}
+            />
+            <button
+              onClick={() => {
+                setFilterDateStart("");
+                setFilterDateEnd("");
+              }}
+              className="h-10 px-3 py-2 text-xs font-bold rounded border border-border hover:bg-secondary transition-colors text-foreground"
+            >
+              Limpar filtro de data
+            </button>
+          </div>
+
+          {hasInvalidDateRange ? (
+            <p className="mt-2 text-xs text-destructive">
+              O período informado é inválido. A data inicial não pode ser maior que a data final.
+            </p>
+          ) : (filterDateStart || filterDateEnd) ? (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Filtro ativo para entregas e orçamentos aprovados no período selecionado.
+            </p>
+          ) : null}
+        </div>
+
         {secondaryWarning && (
           <div className="border border-amber-300/40 bg-amber-50/70 rounded px-3 py-2 text-sm text-amber-900">
             {secondaryWarning}
