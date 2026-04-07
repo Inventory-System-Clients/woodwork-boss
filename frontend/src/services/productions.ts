@@ -67,6 +67,7 @@ export interface CreateProductionInput {
   description: string;
   deliveryDate: string | null;
   installationTeamId: string;
+  budgetId?: string;
   initialCost: number;
   materials: ProductionMaterial[];
 }
@@ -89,6 +90,7 @@ export type ReplaceProductionStatusesInput = {
 
 interface ListProductionsParams {
   employeeId?: string;
+  active?: boolean;
 }
 
 export interface CompleteProductionStockDetail {
@@ -880,11 +882,18 @@ const ensureProduction = (payload: unknown, fallbackMessage: string) => {
 };
 
 const buildProductionsPath = (params?: ListProductionsParams) => {
+  const searchParams = new URLSearchParams();
+
   if (params?.employeeId) {
-    return `/productions?employeeId=${encodeURIComponent(params.employeeId)}`;
+    searchParams.set("employeeId", params.employeeId);
   }
 
-  return "/productions";
+  if (params?.active) {
+    searchParams.set("active", "true");
+  }
+
+  const query = searchParams.toString();
+  return query ? `/productions?${query}` : "/productions";
 };
 
 export const listProductions = async (params?: ListProductionsParams) => {

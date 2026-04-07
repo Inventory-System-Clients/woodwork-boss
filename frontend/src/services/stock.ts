@@ -19,6 +19,10 @@ export interface StockMovement {
 export interface ListStockMovementsFilters {
   productId?: string;
   movementType?: StockMovementType;
+  referenceType?: string;
+  activeOnly?: boolean;
+  startDate?: string;
+  endDate?: string;
   limit?: number;
   offset?: number;
 }
@@ -184,6 +188,22 @@ const buildMovementsPath = (filters?: ListStockMovementsFilters) => {
 
   if (filters?.movementType) {
     params.set("movementType", filters.movementType);
+  }
+
+  if (filters?.referenceType?.trim()) {
+    params.set("referenceType", filters.referenceType.trim());
+  }
+
+  if (filters?.activeOnly) {
+    params.set("activeOnly", "true");
+  }
+
+  if (filters?.startDate?.trim()) {
+    params.set("startDate", filters.startDate.trim());
+  }
+
+  if (filters?.endDate?.trim()) {
+    params.set("endDate", filters.endDate.trim());
   }
 
   if (typeof filters?.limit === "number" && Number.isFinite(filters.limit)) {

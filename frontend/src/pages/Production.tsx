@@ -11,6 +11,7 @@ import { orders as mockOrders, ProductionMaterial } from "@/data/mockData";
 import { Client, listClients } from "@/services/clients";
 import { Product, listProducts } from "@/services/products";
 import { listTeams } from "@/services/teams";
+import { Budget, listBudgets } from "@/services/budgets";
 import {
   AdvanceProductionStatusInput,
   advanceProductionStatus,
@@ -228,6 +229,7 @@ const createMockClientsSnapshot = (): Client[] => {
 };
 
 const createInitialForm = () => ({
+  budgetId: "",
   clientId: "",
   description: "",
   deliveryDate: "",
@@ -253,13 +255,16 @@ const ProductionPage = () => {
   const [teams, setTeams] = useState<TeamOption[]>([]);
   const [clientsCatalog, setClientsCatalog] = useState<Client[]>([]);
   const [productsCatalog, setProductsCatalog] = useState<Product[]>([]);
+  const [approvedBudgetsCatalog, setApprovedBudgetsCatalog] = useState<Budget[]>([]);
   const [statusOptions, setStatusOptions] = useState<ProductionStatusOption[]>([]);
   const [isLoadingStatusOptions, setIsLoadingStatusOptions] = useState(false);
   const [statusOptionsError, setStatusOptionsError] = useState("");
   const [isLoadingClients, setIsLoadingClients] = useState(false);
   const [isLoadingProducts, setIsLoadingProducts] = useState(false);
+  const [isLoadingBudgets, setIsLoadingBudgets] = useState(false);
   const [clientsError, setClientsError] = useState("");
   const [productsError, setProductsError] = useState("");
+  const [budgetsError, setBudgetsError] = useState("");
   const [formError, setFormError] = useState("");
   const [form, setForm] = useState(createInitialForm);
   const [newMaterial, setNewMaterial] = useState({ productId: "", quantity: 1, unit: "unidade" });
@@ -286,6 +291,72 @@ const ProductionPage = () => {
 
   const formatCurrency = (value: number) =>
     value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+  const normalizeDateOnly = (value: string | null | undefined) => {
+    if (!value || typeof value !== "string") {
+      return "";
+    }
+
+    return value.includes("T") ? value.split("T")[0] : value;
+  };
+
+  const normalizeName = (value: string) => value.trim().toLowerCase();
+
+  const findClientByName = (clientName: string) => {
+    const normalized = normalizeName(clientName);
+    return clientsCatalog.find((client) => normalizeName(client.name) === normalized);
+  };
+
+  const findProductByName = (productName: string) => {
+    const normalized = normalizeName(productName);
+    return productsCatalog.find((product) => normalizeName(product.name) === normalized);
+  };
+
+  const resolveBudgetApplicableCost = (budget: Budget) => {
+    const fromSummary = Number(
+      budget.financialSummary?.costsApplicableValue ?? budget.costsApplicableValue ?? 0,
+    );
+
+    if (Number.isFinite(fromSummary) && fromSummary > 0) {
+      return Math.max(0, fromSummary);
+    }
+
+    return Math.max(
+      0,
+      (budget.applicableCosts || []).reduce((sum, cost) => sum + (Number(cost.amount) || 0), 0),
+    );
+  };
+
+  const resolveBudgetTotalCost = (budget: Budget) => {
+    const apiTotalCost = Number(budget.totalCost);
+
+    if (Number.isFinite(apiTotalCost) && apiTotalCost > 0) {
+      return Math.max(0, apiTotalCost);
+    }
+
+    const materialCost = (budget.materials || []).reduce(
+      (sum, material) => sum + (Number(material.unitPrice) || 0) * (Number(material.quantity) || 0),
+      0,
+    );
+    const departmentsCost = (budget.expenseDepartments || []).reduce(
+      (sum, department) => sum + (Number(department.amount) || 0),
+      0,
+    );
+    const laborCost = Math.max(0, Number(budget.laborCost) || 0);
+    const applicableCost = resolveBudgetApplicableCost(budget);
+
+    return Math.max(0, materialCost + departmentsCost + laborCost + applicableCost);
+  };
+
+  const resolveBudgetProfit = (budget: Budget) => {
+    const apiProfitValue = Number(budget.profitValue);
+
+    if (Number.isFinite(apiProfitValue)) {
+      return apiProfitValue;
+    }
+
+    return (Number(budget.totalPrice) || 0) - resolveBudgetTotalCost(budget);
+  };
 
   const loadProductions = async () => {
     setIsLoading(true);
@@ -398,6 +469,31 @@ const ProductionPage = () => {
     }
   };
 
+  const loadApprovedBudgetsForForm = async () => {
+    if (!canCreateProduction) {
+      setApprovedBudgetsCatalog([]);
+      setBudgetsError("");
+      setIsLoadingBudgets(false);
+      return;
+    }
+
+    setIsLoadingBudgets(true);
+    setBudgetsError("");
+
+    try {
+      const budgets = await listBudgets();
+      setApprovedBudgetsCatalog(
+        budgets.filter((budget) => budget.status === "approved"),
+      );
+    } catch (error) {
+      setApprovedBudgetsCatalog([]);
+      const message = error instanceof Error ? error.message : "Falha ao carregar orcamentos aprovados.";
+      setBudgetsError(`Nao foi possivel carregar orcamentos aprovados: ${message}`);
+    } finally {
+      setIsLoadingBudgets(false);
+    }
+  };
+
   const loadClientsForForm = async () => {
     if (!canCreateProduction) {
       setClientsCatalog([]);
@@ -439,7 +535,67 @@ const ProductionPage = () => {
 
     void loadProductsForForm();
     void loadClientsForForm();
+    void loadApprovedBudgetsForForm();
   }, [modal, canCreateProduction]);
+
+  const selectedApprovedBudget = useMemo(
+    () => approvedBudgetsCatalog.find((budget) => budget.id === form.budgetId) || null,
+    [approvedBudgetsCatalog, form.budgetId],
+  );
+
+  const applyApprovedBudgetToForm = (budgetId: string) => {
+    const selectedBudget = approvedBudgetsCatalog.find((budget) => budget.id === budgetId);
+
+    if (!selectedBudget) {
+      setForm((current) => ({
+        ...current,
+        budgetId,
+      }));
+      return;
+    }
+
+    const linkedClient = findClientByName(selectedBudget.clientName);
+    const unresolvedMaterials: string[] = [];
+
+    const mappedMaterials = selectedBudget.materials
+      .map((material) => {
+        const linkedProduct = material.productId
+          ? productsCatalog.find((product) => product.id === material.productId)
+          : findProductByName(material.productName);
+
+        if (!linkedProduct) {
+          unresolvedMaterials.push(material.productName);
+          return null;
+        }
+
+        return {
+          productId: linkedProduct.id,
+          productName: linkedProduct.name,
+          quantity: Number(material.quantity) || 0,
+          unit: material.unit || "unidade",
+        };
+      })
+      .filter((material): material is ProductionMaterial => Boolean(material) && material.quantity > 0);
+
+    setForm((current) => ({
+      ...current,
+      budgetId,
+      clientId: linkedClient?.id || current.clientId,
+      description: selectedBudget.description || current.description,
+      deliveryDate: normalizeDateOnly(selectedBudget.deliveryDate) || current.deliveryDate,
+      initialCost: resolveBudgetTotalCost(selectedBudget),
+      materials: mappedMaterials,
+    }));
+
+    if (unresolvedMaterials.length > 0) {
+      setFormError(
+        `Alguns materiais do orcamento nao foram encontrados no catalogo de produtos e nao puderam ser vinculados: ${unresolvedMaterials.join(", ")}.`,
+      );
+      return;
+    }
+
+    setFormError("");
+  };
 
   const addMaterial = () => {
     const product = productsCatalog.find((p) => p.id === newMaterial.productId);
@@ -785,6 +941,7 @@ const ProductionPage = () => {
         description: form.description.trim(),
         deliveryDate: form.deliveryDate ? new Date(`${form.deliveryDate}T00:00:00`).toISOString() : null,
         installationTeamId: form.installationTeamId,
+        budgetId: form.budgetId || undefined,
         initialCost: Number(form.initialCost),
         materials: form.materials,
       });
@@ -1245,6 +1402,63 @@ const ProductionPage = () => {
             <div className="space-y-6 overflow-y-auto pr-1">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <FormField
+                label="Orcamento aprovado (opcional)"
+                as="select"
+                value={form.budgetId}
+                onChange={(e) => applyApprovedBudgetToForm(e.target.value)}
+                options={approvedBudgetsCatalog.map((budget) => ({
+                  value: budget.id,
+                  label: `#${budget.id} - ${budget.clientName} - ${formatCurrency(Number(budget.totalPrice) || 0)}`,
+                }))}
+              />
+            </div>
+
+            {budgetsError && (
+              <div className="border border-destructive/40 bg-destructive/10 rounded px-3 py-2 text-sm text-destructive flex items-center justify-between gap-3">
+                <span>{budgetsError}</span>
+                <button
+                  onClick={() => void loadApprovedBudgetsForForm()}
+                  className="px-2 py-1 text-[11px] font-bold rounded border border-destructive/30 hover:bg-destructive/20"
+                >
+                  TENTAR NOVAMENTE
+                </button>
+              </div>
+            )}
+
+            {!isLoadingBudgets && approvedBudgetsCatalog.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                Nenhum orcamento aprovado oficialmente encontrado para vinculacao automatica.
+              </p>
+            )}
+
+            {selectedApprovedBudget && (
+              <div className="border border-border rounded p-4 bg-secondary/20">
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-2">
+                  Resumo financeiro do orcamento selecionado
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+                  <div>
+                    <p className="text-muted-foreground">Custo total</p>
+                    <p className="font-mono font-bold text-foreground">{formatCurrency(resolveBudgetTotalCost(selectedApprovedBudget))}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Custos aplicaveis</p>
+                    <p className="font-mono font-bold text-foreground">{formatCurrency(resolveBudgetApplicableCost(selectedApprovedBudget))}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Lucro</p>
+                    <p className="font-mono font-bold text-foreground">{formatCurrency(resolveBudgetProfit(selectedApprovedBudget))}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Preco final</p>
+                    <p className="font-mono font-bold text-primary">{formatCurrency(Number(selectedApprovedBudget.totalPrice) || 0)}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <FormField
                 label="Cliente"
                 as="select"
                 value={form.clientId}
@@ -1415,6 +1629,7 @@ const ProductionPage = () => {
                   isLoadingTeams ||
                   isLoadingClients ||
                   isLoadingProducts ||
+                  isLoadingBudgets ||
                   teams.length === 0 ||
                   clientsCatalog.length === 0 ||
                   productsCatalog.length === 0
