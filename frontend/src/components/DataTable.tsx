@@ -1,4 +1,5 @@
 import { ReactNode } from "react";
+import { useLanguage } from "@/i18n/LanguageProvider";
 
 interface Column<T> {
   key: string;
@@ -23,6 +24,8 @@ export function DataTable<T extends { id: string }>({
   emptyMessage = "Sem dados. Clique para adicionar o primeiro item.",
   rowHighlight,
 }: DataTableProps<T>) {
+  const { t } = useLanguage();
+
   return (
     <div className="w-full overflow-x-auto overflow-y-hidden border border-border rounded bg-card">
       <table className="w-full min-w-[640px] text-left border-collapse">
@@ -33,7 +36,7 @@ export function DataTable<T extends { id: string }>({
                 key={col.key}
                 className="px-3 sm:px-4 py-2 sm:py-3 text-[10px] uppercase tracking-widest text-muted-foreground font-bold"
               >
-                {col.header}
+                {t(col.header)}
               </th>
             ))}
           </tr>
@@ -42,7 +45,7 @@ export function DataTable<T extends { id: string }>({
           {data.length === 0 ? (
             <tr>
               <td colSpan={columns.length} className="px-3 sm:px-4 py-8 text-center text-muted-foreground text-sm">
-                {emptyMessage}
+                {t(emptyMessage)}
               </td>
             </tr>
           ) : (

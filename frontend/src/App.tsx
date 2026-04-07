@@ -4,6 +4,7 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/auth/AuthProvider";
+import { LanguageProvider } from "@/i18n/LanguageProvider";
 import { RequireAuth, RequireRoles } from "@/auth/guards";
 import Index from "./pages/Index.tsx";
 import LoginPage from "./pages/Login.tsx";
@@ -27,30 +28,32 @@ const App = () => (
       <Toaster />
       <Sonner />
       <AuthProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/acompanhar-producao/:token" element={<ProductionTrackingPublicPage />} />
+        <LanguageProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/acompanhar-producao/:token" element={<ProductionTrackingPublicPage />} />
 
-            <Route element={<RequireAuth />}>
-              <Route path="/" element={<Index />} />
-              <Route path="/production" element={<ProductionPage />} />
-              <Route path="/logistics" element={<LogisticsPage />} />
-              <Route path="/forbidden" element={<ForbiddenPage />} />
+              <Route element={<RequireAuth />}>
+                <Route path="/" element={<Index />} />
+                <Route path="/production" element={<ProductionPage />} />
+                <Route path="/logistics" element={<LogisticsPage />} />
+                <Route path="/forbidden" element={<ForbiddenPage />} />
 
-              <Route element={<RequireRoles allowedRoles={["admin", "gerente"]} />}>
-                <Route path="/clients" element={<ClientsPage />} />
-                <Route path="/employees" element={<EmployeesPage />} />
-                <Route path="/teams" element={<TeamsPage />} />
-                <Route path="/products" element={<ProductsPage />} />
-                <Route path="/stock" element={<StockPage />} />
-                <Route path="/budgets" element={<BudgetsPage />} />
+                <Route element={<RequireRoles allowedRoles={["admin", "gerente"]} />}>
+                  <Route path="/clients" element={<ClientsPage />} />
+                  <Route path="/employees" element={<EmployeesPage />} />
+                  <Route path="/teams" element={<TeamsPage />} />
+                  <Route path="/products" element={<ProductsPage />} />
+                  <Route path="/stock" element={<StockPage />} />
+                  <Route path="/budgets" element={<BudgetsPage />} />
+                </Route>
               </Route>
-            </Route>
 
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-        </BrowserRouter>
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </BrowserRouter>
+        </LanguageProvider>
       </AuthProvider>
     </TooltipProvider>
   </QueryClientProvider>

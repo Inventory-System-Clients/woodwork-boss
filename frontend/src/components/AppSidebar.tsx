@@ -2,6 +2,7 @@ import { LayoutDashboard, Users, User, Briefcase, Box, Package, FileText, Hammer
 import { NavLink } from "@/components/NavLink";
 import { useAuth } from "@/auth/AuthProvider";
 import type { UserRole } from "@/auth/types";
+import { useLanguage } from "@/i18n/LanguageProvider";
 import { useLocation } from "react-router-dom";
 import { useEffect, useRef } from "react";
 
@@ -32,6 +33,7 @@ interface AppSidebarProps {
 export function AppSidebar({ mobileOpen = false, onCloseMobile }: AppSidebarProps) {
   const location = useLocation();
   const { user, logout } = useAuth();
+  const { t } = useLanguage();
   const previousPathRef = useRef(location.pathname);
 
   const visibleItems = navItems.filter((item) => {
@@ -60,7 +62,7 @@ export function AppSidebar({ mobileOpen = false, onCloseMobile }: AppSidebarProp
       <div className="h-14 px-4 sm:px-5 flex items-center gap-3 border-b border-border">
         <img
           src="/image.png"
-          alt="Logo Mais Quiosque"
+          alt={t("Logo Mais Quiosque")}
           className="w-10 h-10 sm:w-12 sm:h-12 rounded-sm object-cover"
         />
         <span className="font-bold tracking-tight text-sm sm:text-base bg-gradient-to-r from-[#F9E27D] via-[#D4AF37] to-[#A67C00] bg-clip-text text-transparent drop-shadow-[0_1px_2px_rgba(94,61,0,0.45)]">
@@ -90,7 +92,7 @@ export function AppSidebar({ mobileOpen = false, onCloseMobile }: AppSidebarProp
               activeClassName=""
             >
               <item.icon className="h-4 w-4 shrink-0" />
-              <span>{item.title}</span>
+              <span>{t(item.title)}</span>
             </NavLink>
           );
         })}
@@ -108,10 +110,10 @@ export function AppSidebar({ mobileOpen = false, onCloseMobile }: AppSidebarProp
           onClick={handleLogout}
           className="w-full mb-2 px-3 py-2 text-xs rounded border border-border hover:bg-secondary transition-colors text-muted-foreground"
         >
-          Sair
+          {t("Sair")}
         </button>
 
-        <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Marcenaria v1.0</p>
+        <p className="text-[10px] uppercase tracking-widest text-muted-foreground">{t("Marcenaria v1.0")}</p>
       </div>
     </>
   );

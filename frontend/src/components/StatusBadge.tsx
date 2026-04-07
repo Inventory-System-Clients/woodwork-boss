@@ -1,3 +1,5 @@
+import { useLanguage } from "@/i18n/LanguageProvider";
+
 const statusStyles: Record<string, string> = {
   draft: "bg-muted text-muted-foreground",
   pending: "bg-amber-500/20 text-amber-300",
@@ -35,13 +37,15 @@ const statusLabels: Record<string, string> = {
 };
 
 export function StatusBadge({ status }: { status: string }) {
+  const { t } = useLanguage();
+
   return (
     <span
       className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider ${
         statusStyles[status] || "bg-muted text-muted-foreground"
       }`}
     >
-      {statusLabels[status] || status}
+      {t(statusLabels[status] || status)}
     </span>
   );
 }
