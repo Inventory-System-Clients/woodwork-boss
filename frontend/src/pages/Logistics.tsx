@@ -487,6 +487,30 @@ const LogisticsPage = () => {
     parsedFilterStart && parsedFilterEnd && parsedFilterStart.getTime() > parsedFilterEnd.getTime(),
   );
 
+  const isFullMonthDateFilter = useMemo(() => {
+    if (hasInvalidDateRange || !parsedFilterStart || !parsedFilterEnd) {
+      return false;
+    }
+
+    const isSameMonthAndYear =
+      parsedFilterStart.getFullYear() === parsedFilterEnd.getFullYear() &&
+      parsedFilterStart.getMonth() === parsedFilterEnd.getMonth();
+
+    if (!isSameMonthAndYear) {
+      return false;
+    }
+
+    const isFirstDay = parsedFilterStart.getDate() === 1;
+    const lastDayOfMonth = new Date(
+      parsedFilterEnd.getFullYear(),
+      parsedFilterEnd.getMonth() + 1,
+      0,
+    ).getDate();
+    const isLastDay = parsedFilterEnd.getDate() === lastDayOfMonth;
+
+    return isFirstDay && isLastDay;
+  }, [hasInvalidDateRange, parsedFilterStart, parsedFilterEnd]);
+
   const isDateInSelectedRange = (value: string | null | undefined) => {
     if (!parsedFilterStart && !parsedFilterEnd) {
       return true;
@@ -811,6 +835,16 @@ const LogisticsPage = () => {
       return;
     }
 
+    if (!isFullMonthDateFilter) {
+      toast({
+        variant: "destructive",
+        title: "Periodo invalido para fechamento",
+        description:
+          "Para fechar o mês, filtre exatamente do primeiro ao último dia do mesmo mês.",
+      });
+      return;
+    }
+
     if (!/^\d{4}-\d{2}$/.test(referenceMonth)) {
       toast({
         variant: "destructive",
@@ -895,7 +929,7 @@ const LogisticsPage = () => {
 
                 <button
                   onClick={() => void handleMonthlyClosing()}
-                  disabled={isSavingClosing}
+                  disabled={isSavingClosing || !isFullMonthDateFilter}
                   className="h-10 px-3 py-2 text-xs font-bold rounded bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {isSavingClosing ? "Salvando fechamento..." : "Fechamento Mensal"}
@@ -907,6 +941,10 @@ const LogisticsPage = () => {
           {hasInvalidDateRange ? (
             <p className="mt-2 text-xs text-destructive">
               O período informado é inválido. A data inicial não pode ser maior que a data final.
+            </p>
+          ) : canViewFinancials && (filterDateStart || filterDateEnd) && !isFullMonthDateFilter ? (
+            <p className="mt-2 text-xs text-destructive">
+              Para liberar o fechamento mensal, use data inicial no primeiro dia e data final no último dia do mesmo mês.
             </p>
           ) : (filterDateStart || filterDateEnd) ? (
             <p className="mt-2 text-xs text-muted-foreground">
