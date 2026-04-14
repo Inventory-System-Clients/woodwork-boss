@@ -50,12 +50,17 @@ export interface Budget {
   status: BudgetStatus;
   deliveryDate: string | null;
   estimatedDeliveryBusinessDays?: number | null;
+  validityBusinessDays?: number | null;
+  elapsedBusinessDays?: number | null;
+  remainingValidityBusinessDays?: number | null;
+  isExpired?: boolean;
   totalPrice: number;
   totalCost?: number;
   laborCost?: number;
   profitMargin?: number;
   profitValue?: number;
   notes: string | null;
+  paymentTerms?: string | null;
   approvedAt: string | null;
   costsApplicableValue?: number;
   costsAppliedAt?: string | null;
@@ -77,6 +82,7 @@ export interface CreateBudgetInput {
   totalPrice: number;
   costsApplicableValue?: number;
   notes: string | null;
+  paymentTerms?: string | null;
   status: BudgetStatus;
   materials: BudgetMaterial[];
   expenseDepartments?: BudgetExpenseDepartment[];
@@ -150,6 +156,22 @@ const toOptionalNumber = (value: unknown) => {
 
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const toOptionalBoolean = (value: unknown) => {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (value === "true" || value === "1" || value === 1) {
+    return true;
+  }
+
+  if (value === "false" || value === "0" || value === 0) {
+    return false;
+  }
+
+  return undefined;
 };
 
 const toOptionalMargin = (value: unknown) => {
@@ -445,12 +467,31 @@ const normalizeBudget = (value: unknown): Budget | null => {
         item.deliveryBusinessDays ??
         item.delivery_business_days,
     ),
+    validityBusinessDays: toOptionalNumber(
+      item.validityBusinessDays ?? item.validity_business_days,
+    ),
+    elapsedBusinessDays: toOptionalNumber(
+      item.elapsedBusinessDays ?? item.elapsed_business_days,
+    ),
+    remainingValidityBusinessDays: toOptionalNumber(
+      item.remainingValidityBusinessDays ?? item.remaining_validity_business_days,
+    ),
+    isExpired: toOptionalBoolean(item.isExpired ?? item.is_expired),
     totalPrice: toNumberSafe(item.totalPrice ?? item.total_price, 0),
     totalCost,
     laborCost,
     profitMargin,
     profitValue,
     notes: toNullableString(toStringSafe(item.notes, "")),
+    paymentTerms: toNullableString(
+      toStringSafe(
+        item.paymentTerms ??
+          item.payment_terms ??
+          item.commercialTerms ??
+          item.commercial_terms,
+        "",
+      ),
+    ),
     approvedAt: toNullableIsoString(item.approvedAt ?? item.approved_at),
     costsApplicableValue: toOptionalNumber(
       item.costsApplicableValue ?? item.costs_applicable_value,
@@ -553,6 +594,10 @@ const toBudgetPayload = (input: CreateBudgetInput | UpdateBudgetInput, partial =
 
   if (!partial || input.notes !== undefined) {
     payload.notes = toNullableString(input.notes);
+  }
+
+  if (!partial || input.paymentTerms !== undefined) {
+    payload.paymentTerms = toNullableString(input.paymentTerms);
   }
 
   if (!partial || input.status !== undefined) {

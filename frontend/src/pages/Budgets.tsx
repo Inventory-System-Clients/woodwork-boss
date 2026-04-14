@@ -137,6 +137,13 @@ const PROPOSAL_NOTES_PLACEHOLDER = [
   "  - Pintura final conforme projeto aprovado.",
 ].join("\n");
 
+const DEFAULT_BUDGET_PDF_PAYMENT_TERMS = [
+  "Pagamento: 50% fechamento e assinatura de contrato 50% restante a serem pagos 30 dias apos inicio da obra.",
+  "Prazo previsto para entrega: 60 dias. Proposta valida por 5 dias.",
+].join("\n");
+
+const DEFAULT_BUDGET_VALIDITY_BUSINESS_DAYS = 15;
+
 const DEFAULT_ARCHITECTURE_LINES: ProposalSectionLine[] = [
   { text: "Projeto ou laudo conforme layout aprovado.", indentLevel: 0 },
   { text: "A.R.T. do sistema e da execucao da obra.", indentLevel: 0 },
@@ -200,8 +207,13 @@ interface BudgetRow {
   description: string;
   status: BudgetStatus;
   estimatedDeliveryBusinessDays: number | null;
+  validityBusinessDays: number;
+  elapsedBusinessDays: number;
+  remainingValidityBusinessDays: number;
+  isExpired: boolean;
   deliveryDate: string;
   notes: string | null;
+  paymentTerms: string | null;
   approvedAt: string | null;
   costsApplicableValue: number;
   costsAppliedAt: string | null;
@@ -238,7 +250,7 @@ const parseBusinessDaysInput = (value: string) => {
 
   const parsed = Number(trimmed);
 
-  if (!Number.isFinite(parsed) || parsed <= 0 || !Number.isInteger(parsed)) {
+  if (!Number.isInteger(parsed) || parsed <= 0) {
     return Number.NaN;
   }
 
@@ -620,6 +632,19 @@ const mapBudgetFromApi = (budget: ApiBudget, clientsCatalog: Client[] = []): Bud
     0,
     Number(budget.financialSummary?.remainingCostToApply ?? 0) || 0,
   );
+  const validityBusinessDays =
+    Number.isFinite(Number(budget.validityBusinessDays)) && Number(budget.validityBusinessDays) > 0
+      ? Math.trunc(Number(budget.validityBusinessDays))
+      : DEFAULT_BUDGET_VALIDITY_BUSINESS_DAYS;
+  const elapsedBusinessDays = Math.max(0, Math.trunc(Number(budget.elapsedBusinessDays) || 0));
+  const remainingValidityBusinessDays =
+    Number.isFinite(Number(budget.remainingValidityBusinessDays))
+      ? Math.max(0, Math.trunc(Number(budget.remainingValidityBusinessDays)))
+      : Math.max(0, validityBusinessDays - elapsedBusinessDays);
+  const isExpired =
+    typeof budget.isExpired === "boolean"
+      ? budget.isExpired
+      : remainingValidityBusinessDays <= 0 || budget.status === "rejected";
 
   return {
     id: budget.id,
@@ -632,8 +657,13 @@ const mapBudgetFromApi = (budget: ApiBudget, clientsCatalog: Client[] = []): Bud
       Number.isFinite(Number(budget.estimatedDeliveryBusinessDays))
         ? Math.max(0, Math.trunc(Number(budget.estimatedDeliveryBusinessDays)))
         : null,
+    validityBusinessDays,
+    elapsedBusinessDays,
+    remainingValidityBusinessDays,
+    isExpired,
     deliveryDate: normalizeDateOnly(budget.deliveryDate),
     notes: budget.notes,
+    paymentTerms: budget.paymentTerms || null,
     approvedAt: budget.approvedAt,
     costsApplicableValue,
     costsAppliedAt,
@@ -770,6 +800,7 @@ const createInitialBudgetForm = () => ({
   description: "",
   estimatedDeliveryBusinessDays: "",
   notes: "",
+  paymentTerms: DEFAULT_BUDGET_PDF_PAYMENT_TERMS,
   laborCost: 0,
   costsApplicableValue: 0,
   profitMargin: 0.35,
@@ -784,6 +815,7 @@ const createInitialDetailForm = () => ({
   description: "",
   estimatedDeliveryBusinessDays: "",
   notes: "",
+  paymentTerms: DEFAULT_BUDGET_PDF_PAYMENT_TERMS,
   status: "draft" as BudgetStatus,
   totalPrice: 0,
   costsApplicableValue: 0,
@@ -1752,10 +1784,17 @@ const BudgetsPage = () => {
       return;
     }
 
-    const parsedBusinessDays = parseBusinessDaysInput(form.estimatedDeliveryBusinessDays);
+    const parsedEstimatedDeliveryBusinessDays = parseBusinessDaysInput(
+      form.estimatedDeliveryBusinessDays,
+    );
 
-    if (Number.isNaN(parsedBusinessDays)) {
-      setFormError("Informe um prazo previsto valido em dias uteis (numero inteiro maior que zero).");
+    if (parsedEstimatedDeliveryBusinessDays === null) {
+      setFormError("Campo estimatedDeliveryBusinessDays é obrigatório.");
+      return;
+    }
+
+    if (Number.isNaN(parsedEstimatedDeliveryBusinessDays)) {
+      setFormError("estimatedDeliveryBusinessDays deve ser um número inteiro maior que zero.");
       return;
     }
 
@@ -1797,10 +1836,11 @@ const BudgetsPage = () => {
         category: form.category,
         description: form.description.trim(),
         deliveryDate: null,
-        estimatedDeliveryBusinessDays: parsedBusinessDays,
+        estimatedDeliveryBusinessDays: parsedEstimatedDeliveryBusinessDays,
         totalPrice: finalPriceWithExpenses,
         costsApplicableValue,
         notes: form.notes.trim() ? form.notes.trim() : null,
+        paymentTerms: form.paymentTerms.trim() ? form.paymentTerms.trim() : DEFAULT_BUDGET_PDF_PAYMENT_TERMS,
         status: form.status,
         materials: form.items.map((item) => {
           const payloadItem = {
@@ -1872,10 +1912,11 @@ const BudgetsPage = () => {
         category: budget.category,
         description: budget.description,
         estimatedDeliveryBusinessDays:
-          budget.estimatedDeliveryBusinessDays !== null && budget.estimatedDeliveryBusinessDays !== undefined
+          budget.estimatedDeliveryBusinessDays !== null
             ? String(budget.estimatedDeliveryBusinessDays)
             : "",
         notes: budget.notes || "",
+        paymentTerms: budget.paymentTerms || DEFAULT_BUDGET_PDF_PAYMENT_TERMS,
         status: budget.status,
         totalPrice: budget.finalPrice,
         costsApplicableValue: Math.max(0, Number(budget.costsApplicableValue) || 0),
@@ -1887,7 +1928,11 @@ const BudgetsPage = () => {
       void loadExpenseDepartmentsCatalog();
     } catch (error) {
       setSelectedBudget(null);
-      setDetailError(normalizeBudgetError(error, "Não foi possível carregar os detalhes do orçamento."));
+      if (error instanceof ApiError && error.status === 404) {
+        setDetailError("Este orçamento não está mais disponível. Ele pode ter sido removido após expiração/rejeição.");
+      } else {
+        setDetailError(normalizeBudgetError(error, "Não foi possível carregar os detalhes do orçamento."));
+      }
     } finally {
       setIsLoadingDetail(false);
     }
@@ -1927,10 +1972,17 @@ const BudgetsPage = () => {
       return;
     }
 
-    const parsedDetailBusinessDays = parseBusinessDaysInput(detailForm.estimatedDeliveryBusinessDays);
+    const parsedDetailEstimatedDeliveryBusinessDays = parseBusinessDaysInput(
+      detailForm.estimatedDeliveryBusinessDays,
+    );
 
-    if (Number.isNaN(parsedDetailBusinessDays)) {
-      setDetailError("Informe um prazo previsto valido em dias uteis (numero inteiro maior que zero).");
+    if (parsedDetailEstimatedDeliveryBusinessDays === null) {
+      setDetailError("Campo estimatedDeliveryBusinessDays é obrigatório.");
+      return;
+    }
+
+    if (Number.isNaN(parsedDetailEstimatedDeliveryBusinessDays)) {
+      setDetailError("estimatedDeliveryBusinessDays deve ser um número inteiro maior que zero.");
       return;
     }
 
@@ -1968,8 +2020,11 @@ const BudgetsPage = () => {
           category: detailForm.category,
           description: detailForm.description.trim(),
           deliveryDate: null,
-          estimatedDeliveryBusinessDays: parsedDetailBusinessDays,
+          estimatedDeliveryBusinessDays: parsedDetailEstimatedDeliveryBusinessDays,
           notes: detailForm.notes.trim() ? detailForm.notes.trim() : null,
+          paymentTerms: detailForm.paymentTerms.trim()
+            ? detailForm.paymentTerms.trim()
+            : DEFAULT_BUDGET_PDF_PAYMENT_TERMS,
           status: detailForm.status,
           totalPrice: detailFinalPriceWithExpenses,
           costsApplicableValue: Math.max(0, Number(detailForm.costsApplicableValue) || 0),
@@ -2233,14 +2288,25 @@ const BudgetsPage = () => {
       pdf.text(`Valor unitario: ${formatCurrency(budget.finalPrice)}`, marginX, y);
 
       y += 5;
+      const validityStatusText = budget.isExpired ? "Expirado" : "Dentro da validade";
+      const summaryLines = [
+        `Prazo estimado de entrega: ${formatBusinessDaysLabel(budget.estimatedDeliveryBusinessDays)} (Após assinar contrato)`,
+        `Validade do orçamento: ${budget.validityBusinessDays} dias uteis`,
+        `Dias uteis decorridos: ${budget.elapsedBusinessDays}`,
+        `Dias uteis restantes: ${budget.remainingValidityBusinessDays}`,
+        `Situacao: ${validityStatusText}`,
+      ];
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(8);
+      const summaryText = pdf.splitTextToSize(summaryLines.join("\n"), contentWidth) as string[];
+      pdf.text(summaryText, marginX, y);
+      y += summaryText.length * 3.8 + 2.5;
+
       pdf.setFont("helvetica", "bold");
       pdf.setFontSize(8);
-      const deliveryLeadTime =
-        budget.estimatedDeliveryBusinessDays && budget.estimatedDeliveryBusinessDays > 0
-          ? `${budget.estimatedDeliveryBusinessDays} dias uteis apos confirmacao do orcamento`
-          : "60 dias";
+      const paymentTermsText = budget.paymentTerms?.trim() || DEFAULT_BUDGET_PDF_PAYMENT_TERMS;
       const paymentLines = pdf.splitTextToSize(
-        `Pagamento: 50% fechamento e assinatura de contrato 50% restante a serem pagos 30 dias apos inicio da obra. Prazo previsto para entrega: ${deliveryLeadTime}. Proposta valida por 5 dias.`,
+        paymentTermsText,
         contentWidth,
       ) as string[];
       pdf.text(paymentLines, marginX, y);
@@ -2550,14 +2616,22 @@ const BudgetsPage = () => {
     { key: "finalPrice", header: "Preço Final", mono: true, render: (b: BudgetRow) => `R$ ${b.finalPrice.toFixed(2)}` },
     {
       key: "estimatedDeliveryBusinessDays",
-      header: "Prazo previsto",
+      header: "Prazo estimado",
       mono: true,
-      render: (b: BudgetRow) =>
-        b.estimatedDeliveryBusinessDays !== null
-          ? formatBusinessDaysLabel(b.estimatedDeliveryBusinessDays)
-          : b.deliveryDate
-            ? b.deliveryDate
-            : "-",
+      render: (b: BudgetRow) => formatBusinessDaysLabel(b.estimatedDeliveryBusinessDays),
+    },
+    {
+      key: "validity",
+      header: "Validade",
+      render: (b: BudgetRow) => (
+        <div className="text-xs">
+          <p className="font-medium">{b.validityBusinessDays} dias uteis</p>
+          <p className="text-muted-foreground">Decorridos: {b.elapsedBusinessDays} • Restantes: {b.remainingValidityBusinessDays}</p>
+          <p className={b.isExpired ? "text-destructive font-medium" : "text-success font-medium"}>
+            {b.isExpired ? "Expirado" : "Dentro da validade"}
+          </p>
+        </div>
+      ),
     },
     { key: "status", header: "Status", render: (b: BudgetRow) => <StatusBadge status={b.status} /> },
     {
@@ -2737,13 +2811,12 @@ const BudgetsPage = () => {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <FormField
-              label="Prazo previsto (dias uteis apos confirmacao)"
+              label="Prazo estimado de entrega (dias úteis previstos)"
               type="number"
               min={1}
               step="1"
               value={form.estimatedDeliveryBusinessDays}
               onChange={(e) => setForm({ ...form, estimatedDeliveryBusinessDays: e.target.value })}
-              placeholder="Ex.: 30"
             />
             <FormField
               label="Observações"
@@ -2753,6 +2826,14 @@ const BudgetsPage = () => {
               placeholder={PROPOSAL_NOTES_PLACEHOLDER}
             />
           </div>
+
+          <FormField
+            label="Condições comerciais para PDF"
+            as="textarea"
+            value={form.paymentTerms}
+            onChange={(e) => setForm({ ...form, paymentTerms: e.target.value })}
+            placeholder={DEFAULT_BUDGET_PDF_PAYMENT_TERMS}
+          />
 
           <div>
             <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-3">Itens</p>
@@ -3280,6 +3361,34 @@ const BudgetsPage = () => {
               </div>
             )}
 
+            {selectedBudget && (
+              <div className="rounded border border-border bg-secondary/20 p-3">
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-2">
+                  Validade do orçamento
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+                  <div>
+                    <p className="text-muted-foreground">Prazo estimado de entrega</p>
+                    <p className="font-medium text-foreground">{formatBusinessDaysLabel(selectedBudget.estimatedDeliveryBusinessDays)}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Validade</p>
+                    <p className="font-medium text-foreground">{selectedBudget.validityBusinessDays} dias uteis</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Dias úteis decorridos</p>
+                    <p className="font-medium text-foreground">{selectedBudget.elapsedBusinessDays}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Dias úteis restantes</p>
+                    <p className={selectedBudget.isExpired ? "font-medium text-destructive" : "font-medium text-success"}>
+                      {selectedBudget.remainingValidityBusinessDays} • {selectedBudget.isExpired ? "Expirado" : "Dentro da validade"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <FormField
               label="Descrição"
               as="textarea"
@@ -3290,7 +3399,7 @@ const BudgetsPage = () => {
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <FormField
-                label="Prazo previsto (dias uteis apos confirmacao)"
+                label="Prazo estimado de entrega (dias úteis previstos)"
                 type="number"
                 min={1}
                 step="1"
@@ -3301,7 +3410,6 @@ const BudgetsPage = () => {
                     estimatedDeliveryBusinessDays: e.target.value,
                   }))
                 }
-                placeholder="Ex.: 30"
               />
 
               <FormField
@@ -3327,6 +3435,14 @@ const BudgetsPage = () => {
                 disabled
               />
             </div>
+
+            <FormField
+              label="Condições comerciais para PDF"
+              as="textarea"
+              value={detailForm.paymentTerms}
+              onChange={(e) => setDetailForm((current) => ({ ...current, paymentTerms: e.target.value }))}
+              placeholder={DEFAULT_BUDGET_PDF_PAYMENT_TERMS}
+            />
 
             {selectedBudget && (
               <div>
