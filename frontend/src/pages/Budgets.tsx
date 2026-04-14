@@ -199,6 +199,7 @@ interface BudgetRow {
   category: BudgetCategory;
   description: string;
   status: BudgetStatus;
+  estimatedDeliveryBusinessDays: number | null;
   deliveryDate: string;
   notes: string | null;
   approvedAt: string | null;
@@ -226,6 +227,31 @@ const normalizeDateOnly = (value: string | null | undefined) => {
   }
 
   return value.includes("T") ? value.split("T")[0] : value;
+};
+
+const parseBusinessDaysInput = (value: string) => {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  const parsed = Number(trimmed);
+
+  if (!Number.isFinite(parsed) || parsed <= 0 || !Number.isInteger(parsed)) {
+    return Number.NaN;
+  }
+
+  return parsed;
+};
+
+const formatBusinessDaysLabel = (value: number | null | undefined) => {
+  if (!Number.isFinite(Number(value)) || Number(value) <= 0) {
+    return "-";
+  }
+
+  const normalized = Math.trunc(Number(value));
+  return `${normalized} ${normalized === 1 ? "dia util" : "dias uteis"}`;
 };
 
 const formatDateTime = (value: string | null | undefined) => {
@@ -602,6 +628,10 @@ const mapBudgetFromApi = (budget: ApiBudget, clientsCatalog: Client[] = []): Bud
     category: budget.category,
     description: budget.description,
     status: budget.status,
+    estimatedDeliveryBusinessDays:
+      Number.isFinite(Number(budget.estimatedDeliveryBusinessDays))
+        ? Math.max(0, Math.trunc(Number(budget.estimatedDeliveryBusinessDays)))
+        : null,
     deliveryDate: normalizeDateOnly(budget.deliveryDate),
     notes: budget.notes,
     approvedAt: budget.approvedAt,
@@ -738,7 +768,7 @@ const createInitialBudgetForm = () => ({
   category: "arquitetonico" as BudgetCategory,
   status: "draft" as BudgetStatus,
   description: "",
-  deliveryDate: "",
+  estimatedDeliveryBusinessDays: "",
   notes: "",
   laborCost: 0,
   costsApplicableValue: 0,
@@ -752,7 +782,7 @@ const createInitialDetailForm = () => ({
   clientName: "",
   category: "arquitetonico" as BudgetCategory,
   description: "",
-  deliveryDate: "",
+  estimatedDeliveryBusinessDays: "",
   notes: "",
   status: "draft" as BudgetStatus,
   totalPrice: 0,
@@ -1722,6 +1752,13 @@ const BudgetsPage = () => {
       return;
     }
 
+    const parsedBusinessDays = parseBusinessDaysInput(form.estimatedDeliveryBusinessDays);
+
+    if (Number.isNaN(parsedBusinessDays)) {
+      setFormError("Informe um prazo previsto valido em dias uteis (numero inteiro maior que zero).");
+      return;
+    }
+
     const normalizedFormCostsApplicableValue = Number(form.costsApplicableValue ?? 0);
     if (!Number.isFinite(normalizedFormCostsApplicableValue) || normalizedFormCostsApplicableValue < 0) {
       setFormError("Informe um custo aplicavel valido (maior ou igual a zero).");
@@ -1759,7 +1796,8 @@ const BudgetsPage = () => {
         clientName: client.name,
         category: form.category,
         description: form.description.trim(),
-        deliveryDate: form.deliveryDate ? new Date(`${form.deliveryDate}T00:00:00`).toISOString() : null,
+        deliveryDate: null,
+        estimatedDeliveryBusinessDays: parsedBusinessDays,
         totalPrice: finalPriceWithExpenses,
         costsApplicableValue,
         notes: form.notes.trim() ? form.notes.trim() : null,
@@ -1833,7 +1871,10 @@ const BudgetsPage = () => {
         clientName: budget.clientName,
         category: budget.category,
         description: budget.description,
-        deliveryDate: budget.deliveryDate,
+        estimatedDeliveryBusinessDays:
+          budget.estimatedDeliveryBusinessDays !== null && budget.estimatedDeliveryBusinessDays !== undefined
+            ? String(budget.estimatedDeliveryBusinessDays)
+            : "",
         notes: budget.notes || "",
         status: budget.status,
         totalPrice: budget.finalPrice,
@@ -1886,6 +1927,13 @@ const BudgetsPage = () => {
       return;
     }
 
+    const parsedDetailBusinessDays = parseBusinessDaysInput(detailForm.estimatedDeliveryBusinessDays);
+
+    if (Number.isNaN(parsedDetailBusinessDays)) {
+      setDetailError("Informe um prazo previsto valido em dias uteis (numero inteiro maior que zero).");
+      return;
+    }
+
     const normalizedDetailCostsApplicableValue = Number(detailForm.costsApplicableValue ?? 0);
     if (!Number.isFinite(normalizedDetailCostsApplicableValue) || normalizedDetailCostsApplicableValue < 0) {
       setDetailError("Informe um custo aplicavel valido (maior ou igual a zero).");
@@ -1919,9 +1967,8 @@ const BudgetsPage = () => {
           clientName: detailForm.clientName.trim(),
           category: detailForm.category,
           description: detailForm.description.trim(),
-          deliveryDate: detailForm.deliveryDate
-            ? new Date(`${detailForm.deliveryDate}T00:00:00`).toISOString()
-            : null,
+          deliveryDate: null,
+          estimatedDeliveryBusinessDays: parsedDetailBusinessDays,
           notes: detailForm.notes.trim() ? detailForm.notes.trim() : null,
           status: detailForm.status,
           totalPrice: detailFinalPriceWithExpenses,
@@ -2188,8 +2235,12 @@ const BudgetsPage = () => {
       y += 5;
       pdf.setFont("helvetica", "bold");
       pdf.setFontSize(8);
+      const deliveryLeadTime =
+        budget.estimatedDeliveryBusinessDays && budget.estimatedDeliveryBusinessDays > 0
+          ? `${budget.estimatedDeliveryBusinessDays} dias uteis apos confirmacao do orcamento`
+          : "60 dias";
       const paymentLines = pdf.splitTextToSize(
-        "Pagamento: 50% fechamento e assinatura de contrato 50% restante a serem pagos 30 dias apos inicio da obra. Prazo de entrega da obra 60 dias. Proposta valida por 5 dias.",
+        `Pagamento: 50% fechamento e assinatura de contrato 50% restante a serem pagos 30 dias apos inicio da obra. Prazo previsto para entrega: ${deliveryLeadTime}. Proposta valida por 5 dias.`,
         contentWidth,
       ) as string[];
       pdf.text(paymentLines, marginX, y);
@@ -2497,7 +2548,17 @@ const BudgetsPage = () => {
       render: (b: BudgetRow) => formatCurrency(b.remainingCostToApply),
     },
     { key: "finalPrice", header: "Preço Final", mono: true, render: (b: BudgetRow) => `R$ ${b.finalPrice.toFixed(2)}` },
-    { key: "deliveryDate", header: "Entrega", mono: true, render: (b: BudgetRow) => b.deliveryDate || "-" },
+    {
+      key: "estimatedDeliveryBusinessDays",
+      header: "Prazo previsto",
+      mono: true,
+      render: (b: BudgetRow) =>
+        b.estimatedDeliveryBusinessDays !== null
+          ? formatBusinessDaysLabel(b.estimatedDeliveryBusinessDays)
+          : b.deliveryDate
+            ? b.deliveryDate
+            : "-",
+    },
     { key: "status", header: "Status", render: (b: BudgetRow) => <StatusBadge status={b.status} /> },
     {
       key: "actions", header: "",
@@ -2676,10 +2737,13 @@ const BudgetsPage = () => {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <FormField
-              label="Entrega"
-              type="date"
-              value={form.deliveryDate}
-              onChange={(e) => setForm({ ...form, deliveryDate: e.target.value })}
+              label="Prazo previsto (dias uteis apos confirmacao)"
+              type="number"
+              min={1}
+              step="1"
+              value={form.estimatedDeliveryBusinessDays}
+              onChange={(e) => setForm({ ...form, estimatedDeliveryBusinessDays: e.target.value })}
+              placeholder="Ex.: 30"
             />
             <FormField
               label="Observações"
@@ -3226,10 +3290,18 @@ const BudgetsPage = () => {
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <FormField
-                label="Entrega"
-                type="date"
-                value={detailForm.deliveryDate}
-                onChange={(e) => setDetailForm((current) => ({ ...current, deliveryDate: e.target.value }))}
+                label="Prazo previsto (dias uteis apos confirmacao)"
+                type="number"
+                min={1}
+                step="1"
+                value={detailForm.estimatedDeliveryBusinessDays}
+                onChange={(e) =>
+                  setDetailForm((current) => ({
+                    ...current,
+                    estimatedDeliveryBusinessDays: e.target.value,
+                  }))
+                }
+                placeholder="Ex.: 30"
               />
 
               <FormField

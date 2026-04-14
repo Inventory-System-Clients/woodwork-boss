@@ -728,16 +728,6 @@ const ClientsPage = () => {
             placeholder="Observacoes adicionais"
           />
 
-          <FormField
-            label="Metadata (JSON)"
-            as="textarea"
-            value={form.metadataText}
-            onChange={(event) =>
-              setForm((current) => ({ ...current, metadataText: event.target.value }))
-            }
-            placeholder='{"origem":"indicacao"}'
-          />
-
           <label className="flex items-center gap-2 text-sm text-foreground">
             <input
               type="checkbox"

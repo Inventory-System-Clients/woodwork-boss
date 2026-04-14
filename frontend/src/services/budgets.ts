@@ -49,6 +49,7 @@ export interface Budget {
   description: string;
   status: BudgetStatus;
   deliveryDate: string | null;
+  estimatedDeliveryBusinessDays?: number | null;
   totalPrice: number;
   totalCost?: number;
   laborCost?: number;
@@ -72,6 +73,7 @@ export interface CreateBudgetInput {
   category: BudgetCategory;
   description: string;
   deliveryDate: string | null;
+  estimatedDeliveryBusinessDays?: number | null;
   totalPrice: number;
   costsApplicableValue?: number;
   notes: string | null;
@@ -437,6 +439,12 @@ const normalizeBudget = (value: unknown): Budget | null => {
     description: toStringSafe(item.description, ""),
     status: normalizeStatus(item.status),
     deliveryDate: toNullableIsoString(item.deliveryDate ?? item.delivery_date),
+    estimatedDeliveryBusinessDays: toOptionalNumber(
+      item.estimatedDeliveryBusinessDays ??
+        item.estimated_delivery_business_days ??
+        item.deliveryBusinessDays ??
+        item.delivery_business_days,
+    ),
     totalPrice: toNumberSafe(item.totalPrice ?? item.total_price, 0),
     totalCost,
     laborCost,
@@ -528,6 +536,11 @@ const toBudgetPayload = (input: CreateBudgetInput | UpdateBudgetInput, partial =
 
   if (!partial || input.deliveryDate !== undefined) {
     payload.deliveryDate = input.deliveryDate ?? null;
+  }
+
+  if (!partial || input.estimatedDeliveryBusinessDays !== undefined) {
+    const value = toOptionalNumber(input.estimatedDeliveryBusinessDays);
+    payload.estimatedDeliveryBusinessDays = value === undefined ? null : Math.max(0, Math.trunc(value));
   }
 
   if (!partial || input.totalPrice !== undefined) {
