@@ -2620,19 +2620,6 @@ const BudgetsPage = () => {
       mono: true,
       render: (b: BudgetRow) => formatBusinessDaysLabel(b.estimatedDeliveryBusinessDays),
     },
-    {
-      key: "validity",
-      header: "Validade",
-      render: (b: BudgetRow) => (
-        <div className="text-xs">
-          <p className="font-medium">{b.validityBusinessDays} dias uteis</p>
-          <p className="text-muted-foreground">Decorridos: {b.elapsedBusinessDays} • Restantes: {b.remainingValidityBusinessDays}</p>
-          <p className={b.isExpired ? "text-destructive font-medium" : "text-success font-medium"}>
-            {b.isExpired ? "Expirado" : "Dentro da validade"}
-          </p>
-        </div>
-      ),
-    },
     { key: "status", header: "Status", render: (b: BudgetRow) => <StatusBadge status={b.status} /> },
     {
       key: "actions", header: "",
