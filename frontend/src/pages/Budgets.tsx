@@ -2619,7 +2619,7 @@ const BudgetsPage = () => {
     {
       key: "actions", header: "",
       render: (b: BudgetRow) => (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 min-w-[220px] max-w-[420px]">
           <button
             onClick={(e) => {
               e.stopPropagation();
