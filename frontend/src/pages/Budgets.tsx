@@ -2854,7 +2854,7 @@ const BudgetsPage = () => {
                     onChange={e => setNewItem({ ...newItem, productId: e.target.value })}
                     options={productsCatalog.map((product) => ({
                       value: product.id,
-                      label: product.name,
+                      label: product.supplier ? `${product.name} (${product.supplier})` : product.name,
                     }))}
                   />
                 ) : (
@@ -3446,7 +3446,7 @@ const BudgetsPage = () => {
                         onChange={e => setDetailNewItem({ ...detailNewItem, productId: e.target.value })}
                         options={productsCatalog.map((product) => ({
                           value: product.id,
-                          label: product.name,
+                          label: product.supplier ? `${product.name} (${product.supplier})` : product.name,
                         }))}
                       />
                     ) : (

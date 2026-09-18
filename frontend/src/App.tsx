@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -16,7 +16,6 @@ import TeamsPage from "./pages/Teams.tsx";
 import ProductsPage from "./pages/Products.tsx";
 import BudgetsPage from "./pages/Budgets.tsx";
 import ProductionPage from "./pages/Production.tsx";
-import LogisticsPage from "./pages/Logistics.tsx";
 import ProductionTrackingPublicPage from "./pages/ProductionTrackingPublic.tsx";
 import WorkHoursPage from "./pages/WorkHours.tsx";
 
@@ -44,7 +43,7 @@ const App = () => (
                 </Route>
 
                 <Route element={<RequireRoles allowedRoles={["admin", "gerente"]} />}>
-                  <Route path="/logistics" element={<LogisticsPage />} />
+                  <Route path="/logistics" element={<Navigate to="/" replace />} />
                   <Route path="/clients" element={<ClientsPage />} />
                   <Route path="/employees" element={<EmployeesPage />} />
                   <Route path="/teams" element={<TeamsPage />} />

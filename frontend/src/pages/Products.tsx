@@ -13,36 +13,36 @@ const buildProductsRequestErrorMessage = (error: unknown) => {
       case 401:
         return "Sessão expirada. Redirecionando para login.";
       case 403:
-        return "Acesso negado. Apenas admin e gerente podem acessar Produtos.";
+        return "Acesso negado. Apenas admin e gerente podem acessar Materiais.";
       case 500:
-        return "Erro interno no servidor ao carregar produtos.";
+        return "Erro interno no servidor ao carregar materiais.";
       default:
-        return error.message || "Não foi possível carregar produtos.";
+        return error.message || "Não foi possível carregar materiais.";
     }
   }
 
-  return error instanceof Error ? error.message : "Não foi possível carregar produtos.";
+  return error instanceof Error ? error.message : "Não foi possível carregar materiais.";
 };
 
 const buildProductsSaveErrorMessage = (error: unknown) => {
   if (error instanceof ApiError) {
     switch (error.status) {
       case 400:
-        return "Dados inválidos. Revise o nome do produto.";
+        return "Dados inválidos. Revise o nome e o fornecedor do material.";
       case 403:
-        return "Acesso negado para alterar produtos.";
+        return "Acesso negado para alterar materiais.";
       case 404:
-        return "Produto não encontrado.";
+        return "Material não encontrado.";
       case 409:
-        return "Já existe um produto com este nome.";
+        return "Já existe um material com este nome.";
       case 500:
-        return "Erro interno no servidor ao salvar o produto.";
+        return "Erro interno no servidor ao salvar o material.";
       default:
-        return error.message || "Não foi possível salvar o produto.";
+        return error.message || "Não foi possível salvar o material.";
     }
   }
 
-  return error instanceof Error ? error.message : "Não foi possível salvar o produto.";
+  return error instanceof Error ? error.message : "Não foi possível salvar o material.";
 };
 
 const ProductsPage = () => {
@@ -54,6 +54,7 @@ const ProductsPage = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
   const [name, setName] = useState("");
+  const [supplier, setSupplier] = useState("");
   const [formError, setFormError] = useState("");
 
   const [searchInput, setSearchInput] = useState("");
@@ -80,6 +81,7 @@ const ProductsPage = () => {
   const openNew = () => {
     setEditing(null);
     setName("");
+    setSupplier("");
     setFormError("");
     setModalOpen(true);
   };
@@ -87,6 +89,7 @@ const ProductsPage = () => {
   const openEdit = (product: Product) => {
     setEditing(product);
     setName(product.name);
+    setSupplier(product.supplier || "");
     setFormError("");
     setModalOpen(true);
   };
@@ -95,6 +98,7 @@ const ProductsPage = () => {
     setModalOpen(false);
     setEditing(null);
     setName("");
+    setSupplier("");
     setFormError("");
   };
 
@@ -114,7 +118,7 @@ const ProductsPage = () => {
     const trimmedName = name.trim();
 
     if (!trimmedName) {
-      setFormError("Informe o nome do produto.");
+      setFormError("Informe o nome do material.");
       return;
     }
 
@@ -123,9 +127,9 @@ const ProductsPage = () => {
 
     try {
       if (editing) {
-        await updateProduct(editing.id, { name: trimmedName });
+        await updateProduct(editing.id, { name: trimmedName, supplier: supplier.trim() || null });
       } else {
-        await createProduct({ name: trimmedName });
+        await createProduct({ name: trimmedName, supplier: supplier.trim() || null });
       }
 
       closeModal();
@@ -142,7 +146,8 @@ const ProductsPage = () => {
   };
 
   const columns = [
-    { key: "name", header: "Produto" },
+    { key: "name", header: "Material" },
+    { key: "supplier", header: "Fornecedor (marca)", render: (item: Product) => item.supplier || "-" },
     {
       key: "actions",
       header: "",
@@ -154,7 +159,7 @@ const ProductsPage = () => {
               openEdit(item);
             }}
             className="p-1 hover:bg-secondary rounded text-muted-foreground hover:text-foreground"
-            title="Editar produto"
+            title="Editar material"
           >
             <Pencil className="h-3.5 w-3.5" />
           </button>
@@ -165,14 +170,14 @@ const ProductsPage = () => {
 
   return (
     <DashboardLayout
-      title="Produtos"
-      subtitle="Lista de produtos usados nas produções"
+      title="Materiais"
+      subtitle="Materiais usados nas produções e seus fornecedores"
       action={
         <button
           onClick={openNew}
           className="bg-primary text-primary-foreground px-3 py-1.5 rounded text-xs font-bold hover:opacity-90 transition-opacity flex items-center gap-1.5"
         >
-          <Plus className="h-3.5 w-3.5" /> NOVO PRODUTO
+          <Plus className="h-3.5 w-3.5" /> NOVO MATERIAL
         </button>
       }
     >
@@ -192,10 +197,10 @@ const ProductsPage = () => {
         <div className="flex flex-wrap items-end gap-3">
           <div className="w-full md:max-w-sm">
             <FormField
-              label="Buscar produto"
+              label="Buscar material"
               value={searchInput}
               onChange={(event) => setSearchInput(event.target.value)}
-              placeholder="Digite parte do nome"
+              placeholder="Digite parte do nome ou da marca"
             />
           </div>
 
@@ -223,21 +228,28 @@ const ProductsPage = () => {
           data={data}
           emptyMessage={
             isLoading
-              ? "Carregando produtos..."
+              ? "Carregando materiais..."
               : activeSearch
-                ? "Nenhum produto encontrado para o filtro informado."
-                : "Nenhum produto cadastrado."
+                ? "Nenhum material encontrado para o filtro informado."
+                : "Nenhum material cadastrado."
           }
         />
       </div>
 
-      <Modal open={modalOpen} onClose={closeModal} title={editing ? "Editar Produto" : "Novo Produto"}>
+      <Modal open={modalOpen} onClose={closeModal} title={editing ? "Editar Material" : "Novo Material"}>
         <div className="space-y-4">
           <FormField
             label="Nome"
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="Nome do produto"
+            placeholder="Nome do material"
+          />
+
+          <FormField
+            label="Fornecedor (marca)"
+            value={supplier}
+            onChange={(event) => setSupplier(event.target.value)}
+            placeholder="Ex.: Duratex, Blum (opcional)"
           />
 
           {formError && <p className="text-sm text-destructive">{formError}</p>}

@@ -8,7 +8,6 @@ import { toast } from "@/components/ui/use-toast";
 import { listBudgets, type Budget } from "@/services/budgets";
 import { listProductions, EmployeeProduction } from "@/services/productions";
 import {
-  listActiveProductionMaterialConsumption,
   listLogisticsMonthlyClosings,
   type LogisticsMonthlyClosing,
   upsertLogisticsMonthlyClosing,
@@ -33,14 +32,6 @@ type DeliveryHealthStatus = "late" | "near_due" | "on_time";
 interface LogisticsProductionRow extends EmployeeProduction {
   daysToDelivery: number | null;
   deliveryHealthStatus: DeliveryHealthStatus;
-}
-
-interface MaterialUsageRow {
-  id: string;
-  material: string;
-  totalQuantity: number;
-  unit: string;
-  productionsCount: number;
 }
 
 interface FinancialBudgetRow {
@@ -290,7 +281,6 @@ const LogisticsPage = () => {
   const { canViewFinancials } = useRoleAccess();
   const [productions, setProductions] = useState<EmployeeProduction[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
-  const [materialUsageRows, setMaterialUsageRows] = useState<MaterialUsageRow[]>([]);
   const [filterDateStart, setFilterDateStart] = useState("");
   const [filterDateEnd, setFilterDateEnd] = useState("");
   const [teamCount, setTeamCount] = useState(0);
@@ -315,16 +305,11 @@ const LogisticsPage = () => {
         teamsResult,
         employeesResult,
         budgetsResult,
-        materialConsumptionResult,
       ] = await Promise.allSettled([
         listProductions({ active: true }),
         listTeams(),
         listEmployees(),
         listBudgets(),
-        listActiveProductionMaterialConsumption({
-          startDate: filterDateStart || undefined,
-          endDate: filterDateEnd || undefined,
-        }),
       ]);
 
       if (productionsResult.status !== "fulfilled") {
@@ -342,21 +327,6 @@ const LogisticsPage = () => {
       } else {
         setBudgets([]);
         warnings.push("Não foi possível obter orçamentos do banco para calcular lucro e receita na logística.");
-      }
-
-      if (materialConsumptionResult.status === "fulfilled") {
-        setMaterialUsageRows(
-          materialConsumptionResult.value.data.map((item) => ({
-            id: item.productId,
-            material: item.productName,
-            unit: item.unit || "unidade",
-            totalQuantity: item.totalQuantityUsed,
-            productionsCount: item.activeProductionsCount,
-          })),
-        );
-      } else {
-        setMaterialUsageRows([]);
-        warnings.push("Não foi possível obter materiais consumidos por produções ativas.");
       }
 
       if (teamsResult.status === "fulfilled") {
@@ -377,7 +347,6 @@ const LogisticsPage = () => {
     } catch (error) {
       setProductions([]);
       setBudgets([]);
-      setMaterialUsageRows([]);
       setTeamCount(0);
       setActiveEmployeesCount(null);
       setRequestError(`Não foi possível carregar dados de logística: ${getErrorMessage(error, "Erro inesperado.")}`);
@@ -699,18 +668,6 @@ const LogisticsPage = () => {
     return Array.from(map.values()).sort((a, b) => a.monthKey.localeCompare(b.monthKey));
   }, [financialRows]);
 
-  const sortedMaterialUsageRows = useMemo(
-    () =>
-      [...materialUsageRows].sort((a, b) => {
-        if (b.totalQuantity !== a.totalQuantity) {
-          return b.totalQuantity - a.totalQuantity;
-        }
-
-        return b.productionsCount - a.productionsCount;
-      }),
-    [materialUsageRows],
-  );
-
   const productionColumns = [
     { key: "clientName", header: "Cliente" },
     { key: "description", header: "Descrição" },
@@ -740,17 +697,6 @@ const LogisticsPage = () => {
       render: (item: LogisticsProductionRow) => <StatusBadge status={item.productionStatus} />,
     },
     { key: "installationTeam", header: "Equipe" },
-  ];
-
-  const materialColumns = [
-    { key: "material", header: "Material" },
-    {
-      key: "totalQuantity",
-      header: "Quantidade Total",
-      mono: true,
-      render: (item: MaterialUsageRow) => `${item.totalQuantity} ${item.unit}`,
-    },
-    { key: "productionsCount", header: "Produções Ativas", mono: true },
   ];
 
   const activeEmployeesLabel = activeEmployeesCount === null ? "N/D" : activeEmployeesCount;
@@ -1085,19 +1031,6 @@ const LogisticsPage = () => {
               )}
             </CardContent>
           </Card>
-        </div>
-
-        <div>
-          <h2 className="text-xs uppercase tracking-widest text-muted-foreground font-bold mb-4">Materiais Mais Usados (Produções Ativas)</h2>
-          <DataTable
-            columns={materialColumns}
-            data={sortedMaterialUsageRows}
-            emptyMessage={
-              isLoading
-                ? "Carregando uso de materiais..."
-                : "Sem produções ativas para calcular consumo de materiais."
-            }
-          />
         </div>
 
         <div>

@@ -3,16 +3,20 @@ import { parseCollection, request } from "@/services/api";
 export interface Product {
   id: string;
   name: string;
+  /** Supplier (brand) of the material. */
+  supplier: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface CreateProductInput {
   name: string;
+  supplier?: string | null;
 }
 
 export interface UpdateProductInput {
   name: string;
+  supplier?: string | null;
 }
 
 const toRecord = (value: unknown): Record<string, unknown> | null => {
@@ -43,6 +47,7 @@ const normalizeProduct = (value: unknown): Product | null => {
   return {
     id,
     name,
+    supplier: toStringSafe(item.supplier, "").trim() || null,
     createdAt: toStringSafe(item.createdAt ?? item.created_at, ""),
     updatedAt: toStringSafe(item.updatedAt ?? item.updated_at, ""),
   };
@@ -72,9 +77,15 @@ const ensureProduct = (payload: unknown, fallbackMessage: string) => {
   return normalized;
 };
 
-const toCreatePayload = (input: CreateProductInput) => ({ name: input.name.trim() });
+const toCreatePayload = (input: CreateProductInput) => ({
+  name: input.name.trim(),
+  supplier: input.supplier?.trim() || null,
+});
 
-const toUpdatePayload = (input: UpdateProductInput) => ({ name: input.name.trim() });
+const toUpdatePayload = (input: UpdateProductInput) => ({
+  name: input.name.trim(),
+  supplier: input.supplier?.trim() || null,
+});
 
 const buildProductsPath = (search?: string) => {
   const query = search?.trim();

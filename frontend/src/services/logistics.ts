@@ -1,29 +1,5 @@
 import { parseCollection, request } from "@/services/api";
 
-export interface ActiveProductionMaterialConsumptionRow {
-  productId: string;
-  productName: string;
-  unit: string;
-  totalQuantityUsed: number;
-  activeProductionsCount: number;
-}
-
-export interface ActiveProductionMaterialConsumptionMeta {
-  startDate: string | null;
-  endDate: string | null;
-  totalItems: number;
-}
-
-export interface ListActiveProductionMaterialConsumptionResult {
-  data: ActiveProductionMaterialConsumptionRow[];
-  meta: ActiveProductionMaterialConsumptionMeta;
-}
-
-interface ListActiveProductionMaterialConsumptionFilters {
-  startDate?: string;
-  endDate?: string;
-}
-
 export interface LogisticsMonthlyClosing {
   id: string;
   referenceMonth: string;
@@ -56,75 +32,9 @@ const toRecord = (value: unknown): Record<string, unknown> | null => {
 const toStringSafe = (value: unknown, fallback = "") =>
   typeof value === "string" ? value : fallback;
 
-const toNullableString = (value: unknown) => {
-  if (typeof value !== "string") {
-    return null;
-  }
-
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-};
-
 const toNumberSafe = (value: unknown, fallback = 0) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
-};
-
-const normalizeRow = (value: unknown): ActiveProductionMaterialConsumptionRow | null => {
-  const item = toRecord(value);
-
-  if (!item) {
-    return null;
-  }
-
-  const productId = toStringSafe(item.productId ?? item.product_id, "").trim();
-  const productName = toStringSafe(item.productName ?? item.product_name, "").trim();
-
-  if (!productId && !productName) {
-    return null;
-  }
-
-  return {
-    productId: productId || productName,
-    productName: productName || "Produto",
-    unit: toStringSafe(item.unit, "unidade") || "unidade",
-    totalQuantityUsed: Math.max(0, toNumberSafe(item.totalQuantityUsed ?? item.total_quantity_used, 0)),
-    activeProductionsCount: Math.max(
-      0,
-      Math.trunc(toNumberSafe(item.activeProductionsCount ?? item.active_productions_count, 0)),
-    ),
-  };
-};
-
-const normalizeMeta = (
-  payload: unknown,
-  fallbackLength: number,
-): ActiveProductionMaterialConsumptionMeta => {
-  const record = toRecord(payload);
-  const rawMeta = toRecord(record?.meta);
-
-  return {
-    startDate: toNullableString(rawMeta?.startDate ?? rawMeta?.start_date),
-    endDate: toNullableString(rawMeta?.endDate ?? rawMeta?.end_date),
-    totalItems: Math.max(0, Math.trunc(toNumberSafe(rawMeta?.totalItems ?? rawMeta?.total_items, fallbackLength))),
-  };
-};
-
-const buildPath = (filters?: ListActiveProductionMaterialConsumptionFilters) => {
-  const params = new URLSearchParams();
-
-  if (filters?.startDate?.trim()) {
-    params.set("startDate", filters.startDate.trim());
-  }
-
-  if (filters?.endDate?.trim()) {
-    params.set("endDate", filters.endDate.trim());
-  }
-
-  const query = params.toString();
-  const basePath = "/logistics/active-productions/material-consumption";
-
-  return query ? `${basePath}?${query}` : basePath;
 };
 
 const normalizeMonthlyClosing = (value: unknown): LogisticsMonthlyClosing | null => {
@@ -165,26 +75,6 @@ const buildMonthlyClosingsPath = (referenceMonth?: string) => {
   }
 
   return `/logistics/fechamentos?referenceMonth=${encodeURIComponent(normalizedReferenceMonth)}`;
-};
-
-export const listActiveProductionMaterialConsumption = async (
-  filters?: ListActiveProductionMaterialConsumptionFilters,
-): Promise<ListActiveProductionMaterialConsumptionResult> => {
-  const payload = await request<unknown>(buildPath(filters));
-  const record = toRecord(payload);
-
-  const source = Array.isArray(record?.data)
-    ? record.data
-    : parseCollection<unknown>(payload);
-
-  const data = source
-    .map(normalizeRow)
-    .filter((item): item is ActiveProductionMaterialConsumptionRow => Boolean(item));
-
-  return {
-    data,
-    meta: normalizeMeta(payload, data.length),
-  };
 };
 
 export const upsertLogisticsMonthlyClosing = async (

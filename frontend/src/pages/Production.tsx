@@ -253,7 +253,7 @@ const createInitialForm = () => ({
   expenses: [] as ProductionExpenseInput[],
 });
 
-const createInitialNewProduct = () => ({ name: "", quantity: 1, unit: "unidade", unitPrice: 0 });
+const createInitialNewProduct = () => ({ name: "", supplier: "", quantity: 1, unit: "unidade", unitPrice: 0 });
 const createInitialNewExpense = () => ({ description: "", category: "", amount: 0 });
 
 const ProductionPage = () => {
@@ -690,17 +690,17 @@ const ProductionPage = () => {
     const unitPrice = Math.max(0, Number(newProduct.unitPrice) || 0);
 
     if (!name) {
-      setFormError("Informe o nome do novo produto.");
+      setFormError("Informe o nome do novo material.");
       return;
     }
 
     if (!Number.isFinite(quantity) || quantity <= 0) {
-      setFormError("Informe uma quantidade valida para o novo produto.");
+      setFormError("Informe uma quantidade valida para o novo material.");
       return;
     }
 
     if (isMockMode) {
-      setFormError("No modo local/mock, nao e possivel cadastrar produto novo.");
+      setFormError("No modo local/mock, nao e possivel cadastrar material novo.");
       return;
     }
 
@@ -708,8 +708,8 @@ const ProductionPage = () => {
     setFormError("");
 
     try {
-      // The product only enters the catalog; its cost is tracked as a material of this production.
-      const created = await createProduct({ name });
+      // The material only enters the catalog; its cost is tracked as a material of this production.
+      const created = await createProduct({ name, supplier: newProduct.supplier.trim() || null });
 
       setProductsCatalog((current) => [created, ...current]);
       setForm((current) => ({
@@ -723,7 +723,7 @@ const ProductionPage = () => {
       setIsNewProductMode(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Falha ao cadastrar produto.";
-      setFormError(`Nao foi possivel cadastrar o produto: ${message}`);
+      setFormError(`Nao foi possivel cadastrar o material: ${message}`);
     } finally {
       setIsCreatingProduct(false);
     }
@@ -1935,8 +1935,8 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
 
               <div className="mb-3 flex flex-wrap gap-2">
                 {([
-                  { value: false, label: "Produto cadastrado" },
-                  { value: true, label: "Cadastrar produto novo" },
+                  { value: false, label: "Material cadastrado" },
+                  { value: true, label: "Cadastrar material novo" },
                 ] as const).map((option) => (
                   <button
                     key={option.label}
@@ -1958,10 +1958,18 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
                   <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
                     <div className="md:col-span-2">
                       <FormField
-                        label="Nome do produto"
+                        label="Nome do material"
                         value={newProduct.name}
                         onChange={(e) => setNewProduct((current) => ({ ...current, name: e.target.value }))}
                         placeholder="Ex.: Dobradiça soft-close"
+                      />
+                    </div>
+                    <div className="md:col-span-3">
+                      <FormField
+                        label="Fornecedor (marca)"
+                        value={newProduct.supplier}
+                        onChange={(e) => setNewProduct((current) => ({ ...current, supplier: e.target.value }))}
+                        placeholder="Opcional. Ex.: Blum"
                       />
                     </div>
                     <FormField
@@ -1987,7 +1995,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
                     />
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    O produto é cadastrado e já entra nos materiais deste projeto. O valor (quantidade × preço) conta como gasto no relatório de custos.
+                    O material é cadastrado e já entra nos materiais deste projeto. O valor (quantidade × preço) conta como gasto no relatório de custos.
                   </p>
                   <button
                     onClick={() => void addNewProductAsMaterial()}
@@ -2001,13 +2009,13 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
                 <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
                   <div className="md:col-span-2">
                     <FormField
-                      label="Produto"
+                      label="Material"
                       as="select"
                       value={newMaterial.productId}
                       onChange={(e) => setNewMaterial((current) => ({ ...current, productId: e.target.value }))}
                       options={productsCatalog.map((product) => ({
                         value: product.id,
-                        label: product.name,
+                        label: product.supplier ? `${product.name} (${product.supplier})` : product.name,
                       }))}
                     />
                   </div>
