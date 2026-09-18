@@ -12,8 +12,6 @@ import {
   type LogisticsMonthlyClosing,
   upsertLogisticsMonthlyClosing,
 } from "@/services/logistics";
-import { listTeams } from "@/services/teams";
-import { listEmployees } from "@/services/employees";
 import { useRoleAccess } from "@/auth/AuthProvider";
 import {
   ChartContainer,
@@ -24,7 +22,7 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { AlertTriangle, CheckCircle2, Clock3, DollarSign, Truck, UserCheck, Users } from "lucide-react";
+import { DollarSign, Truck } from "lucide-react";
 import { StatCard } from "@/components/StatCard";
 
 type DeliveryHealthStatus = "late" | "near_due" | "on_time";
@@ -283,8 +281,6 @@ const LogisticsPage = () => {
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [filterDateStart, setFilterDateStart] = useState("");
   const [filterDateEnd, setFilterDateEnd] = useState("");
-  const [teamCount, setTeamCount] = useState(0);
-  const [activeEmployeesCount, setActiveEmployeesCount] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [requestError, setRequestError] = useState("");
   const [secondaryWarning, setSecondaryWarning] = useState("");
@@ -302,13 +298,9 @@ const LogisticsPage = () => {
     try {
       const [
         productionsResult,
-        teamsResult,
-        employeesResult,
         budgetsResult,
       ] = await Promise.allSettled([
         listProductions({ active: true }),
-        listTeams(),
-        listEmployees(),
         listBudgets(),
       ]);
 
@@ -329,26 +321,10 @@ const LogisticsPage = () => {
         warnings.push("Não foi possível obter orçamentos do banco para calcular lucro e receita na logística.");
       }
 
-      if (teamsResult.status === "fulfilled") {
-        setTeamCount(teamsResult.value.length);
-      } else {
-        setTeamCount(new Set(nextProductions.map((item) => item.installationTeam).filter(Boolean)).size);
-        warnings.push("Não foi possível obter o total de equipes do banco.");
-      }
-
-      if (employeesResult.status === "fulfilled") {
-        setActiveEmployeesCount(employeesResult.value.filter((employee) => employee.isActive).length);
-      } else {
-        setActiveEmployeesCount(null);
-        warnings.push("Não foi possível obter o total de funcionários ativos do banco.");
-      }
-
       setSecondaryWarning(warnings.join(" "));
     } catch (error) {
       setProductions([]);
       setBudgets([]);
-      setTeamCount(0);
-      setActiveEmployeesCount(null);
       setRequestError(`Não foi possível carregar dados de logística: ${getErrorMessage(error, "Erro inesperado.")}`);
     } finally {
       setIsLoading(false);
@@ -699,8 +675,6 @@ const LogisticsPage = () => {
     { key: "installationTeam", header: "Equipe" },
   ];
 
-  const activeEmployeesLabel = activeEmployeesCount === null ? "N/D" : activeEmployeesCount;
-
   const closingColumns = [
     { key: "referenceMonth", header: "Mes", render: (item: LogisticsMonthlyClosing) => formatReferenceMonth(item.referenceMonth) },
     { key: "custoGeralAtivo", header: "Custo Geral Ativo", mono: true, render: (item: LogisticsMonthlyClosing) => formatCurrency(item.custoGeralAtivo) },
@@ -864,26 +838,6 @@ const LogisticsPage = () => {
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5 gap-4">
-          <StatCard title="Equipes" value={teamCount} icon={<Users className="h-4 w-4" />} />
-          <StatCard
-            title="Funcionários Ativos"
-            value={activeEmployeesLabel}
-            icon={<UserCheck className="h-4 w-4" />}
-            subtitle={activeEmployeesCount === null ? "Sem acesso ao módulo de funcionários" : undefined}
-          />
-          <StatCard
-            title="Produções Atrasadas"
-            value={overdueProductions.length}
-            icon={<AlertTriangle className="h-4 w-4" />}
-            highlight={overdueProductions.length > 0}
-          />
-          <StatCard
-            title="Quase no Prazo"
-            value={nearDueProductions.length}
-            icon={<Clock3 className="h-4 w-4" />}
-            highlight={nearDueProductions.length > 0}
-          />
-          <StatCard title="Produções em Dia" value={onTimeProductions.length} icon={<CheckCircle2 className="h-4 w-4" />} />
           <StatCard
             title="Custo Geral Ativo"
             value={formatCurrency(financialTotals.generalCost)}
