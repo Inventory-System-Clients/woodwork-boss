@@ -45,6 +45,7 @@ export interface ProductionMaterial {
   productName: string;
   quantity: number;
   unit: string;
+  unitPrice?: number;
 }
 
 export interface Order {

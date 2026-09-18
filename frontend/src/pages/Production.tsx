@@ -9,7 +9,7 @@ import { dispatchInventoryRefresh } from "@/lib/inventory-events";
 import { useAuth, useRoleAccess } from "@/auth/AuthProvider";
 import { orders as mockOrders, ProductionMaterial } from "@/data/mockData";
 import { Client, listClients } from "@/services/clients";
-import { Product, listProducts } from "@/services/products";
+import { Product, createProduct, listProducts } from "@/services/products";
 import { listTeams } from "@/services/teams";
 import { Budget, listBudgets } from "@/services/budgets";
 import {
@@ -19,11 +19,17 @@ import {
   CompleteProductionStockDetail,
   EmployeeProduction,
   ProductionImage,
+  ProductionCostReport,
+  ProductionExpenseInput,
   ProductionImageError,
   ProductionStatusOption,
   ProductionShareError,
+  addProductionExpense,
   createProductionShareLink,
   createProduction,
+  deleteProduction,
+  deleteProductionExpense,
+  getProductionCostReport,
   formatStockDetailMessage,
   listProductionImages,
   listProductionStatusOptions,
@@ -31,7 +37,7 @@ import {
   replaceProductionStatuses,
   uploadProductionImages,
 } from "@/services/productions";
-import { ImagePlus, Pencil, Plus, Share2, Trash2 } from "lucide-react";
+import { ImagePlus, Pencil, Plus, Printer, Receipt, Share2, Trash2 } from "lucide-react";
 
 const statusLabels: Record<string, string> = {
   pending: "Pendente",
@@ -236,7 +242,11 @@ const createInitialForm = () => ({
   installationTeamId: "",
   initialCost: 0,
   materials: [] as ProductionMaterial[],
+  expenses: [] as ProductionExpenseInput[],
 });
+
+const createInitialNewProduct = () => ({ name: "", quantity: 1, unit: "unidade", unitPrice: 0 });
+const createInitialNewExpense = () => ({ description: "", category: "", amount: 0 });
 
 const ProductionPage = () => {
   const { user } = useAuth();
@@ -249,6 +259,8 @@ const ProductionPage = () => {
   const [isLoadingTeams, setIsLoadingTeams] = useState(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [sharingId, setSharingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
   const [requestError, setRequestError] = useState("");
   const [modeNotice, setModeNotice] = useState("");
   const [isMockMode, setIsMockMode] = useState(false);
@@ -267,7 +279,17 @@ const ProductionPage = () => {
   const [budgetsError, setBudgetsError] = useState("");
   const [formError, setFormError] = useState("");
   const [form, setForm] = useState(createInitialForm);
-  const [newMaterial, setNewMaterial] = useState({ productId: "", quantity: 1, unit: "unidade" });
+  const [newMaterial, setNewMaterial] = useState({ productId: "", quantity: 1, unit: "unidade", unitPrice: 0 });
+  const [isNewProductMode, setIsNewProductMode] = useState(false);
+  const [newProduct, setNewProduct] = useState(createInitialNewProduct);
+  const [isCreatingProduct, setIsCreatingProduct] = useState(false);
+  const [newExpense, setNewExpense] = useState(createInitialNewExpense);
+  const [reportOrder, setReportOrder] = useState<EmployeeProduction | null>(null);
+  const [costReport, setCostReport] = useState<ProductionCostReport | null>(null);
+  const [isLoadingReport, setIsLoadingReport] = useState(false);
+  const [reportError, setReportError] = useState("");
+  const [reportExpense, setReportExpense] = useState(createInitialNewExpense);
+  const [isSavingExpense, setIsSavingExpense] = useState(false);
   const [selectedToAdvance, setSelectedToAdvance] = useState<EmployeeProduction | null>(null);
   const [advanceMode, setAdvanceMode] = useState<StageInputMode>("existing");
   const [advanceStageId, setAdvanceStageId] = useState("");
@@ -380,7 +402,7 @@ const ProductionPage = () => {
 
     try {
       const employeeId = isEmployee ? user?.id : undefined;
-      const list = await listProductions(employeeId ? { employeeId } : undefined);
+      const list = await listProductions({ employeeId, active: !showAll });
       setData(list);
       setIsMockMode(false);
       setModeNotice("");
@@ -524,9 +546,12 @@ const ProductionPage = () => {
 
   useEffect(() => {
     void loadProductions();
+  }, [isEmployee, user?.id, showAll]);
+
+  useEffect(() => {
     void loadTeams();
     void loadStatusOptions();
-  }, [canCreateProduction, canCompleteProduction, isEmployee, user?.id]);
+  }, [canCreateProduction, canCompleteProduction]);
 
   useEffect(() => {
     if (!modal) {
@@ -573,9 +598,13 @@ const ProductionPage = () => {
           productName: linkedProduct.name,
           quantity: Number(material.quantity) || 0,
           unit: material.unit || "unidade",
+          unitPrice: Number(material.unitPrice) || 0,
         };
       })
-      .filter((material): material is ProductionMaterial => Boolean(material) && material.quantity > 0);
+      .filter(
+        (material): material is ProductionMaterial & { unitPrice: number } =>
+          Boolean(material) && material.quantity > 0,
+      );
 
     setForm((current) => ({
       ...current,
@@ -601,6 +630,7 @@ const ProductionPage = () => {
     const product = productsCatalog.find((p) => p.id === newMaterial.productId);
     const quantity = Number(newMaterial.quantity);
     const unit = newMaterial.unit.trim() || "unidade";
+    const unitPrice = Math.max(0, Number(newMaterial.unitPrice) || 0);
 
     if (!product) {
       setFormError("Selecione um produto valido.");
@@ -620,6 +650,7 @@ const ProductionPage = () => {
         updated[existingIdx] = {
           ...updated[existingIdx],
           quantity: updated[existingIdx].quantity + quantity,
+          unitPrice: unitPrice || updated[existingIdx].unitPrice,
         };
         return { ...current, materials: updated };
       }
@@ -633,13 +664,92 @@ const ProductionPage = () => {
             productName: product.name,
             quantity,
             unit,
+            unitPrice,
           },
         ],
       };
     });
 
     setFormError("");
-    setNewMaterial({ productId: "", quantity: 1, unit });
+    setNewMaterial({ productId: "", quantity: 1, unit, unitPrice: 0 });
+  };
+
+  const addNewProductAsMaterial = async () => {
+    const name = newProduct.name.trim();
+    const quantity = Number(newProduct.quantity);
+    const unit = newProduct.unit.trim() || "unidade";
+    const unitPrice = Math.max(0, Number(newProduct.unitPrice) || 0);
+
+    if (!name) {
+      setFormError("Informe o nome do novo produto.");
+      return;
+    }
+
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setFormError("Informe uma quantidade valida para o novo produto.");
+      return;
+    }
+
+    if (isMockMode) {
+      setFormError("No modo local/mock, nao e possivel cadastrar produto novo.");
+      return;
+    }
+
+    setIsCreatingProduct(true);
+    setFormError("");
+
+    try {
+      // Stock is created with the purchased quantity, so approving the production deducts it back to zero.
+      const created = await createProduct({ name, stockQuantity: quantity, lowStockAlertQuantity: 0 });
+
+      setProductsCatalog((current) => [created, ...current]);
+      setForm((current) => ({
+        ...current,
+        materials: [
+          ...current.materials,
+          { productId: created.id, productName: created.name, quantity, unit, unitPrice },
+        ],
+      }));
+      setNewProduct(createInitialNewProduct());
+      setIsNewProductMode(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha ao cadastrar produto.";
+      setFormError(`Nao foi possivel cadastrar o produto: ${message}`);
+    } finally {
+      setIsCreatingProduct(false);
+    }
+  };
+
+  const addExpenseToForm = () => {
+    const description = newExpense.description.trim();
+    const amount = Number(newExpense.amount);
+
+    if (!description) {
+      setFormError("Informe a descricao do gasto.");
+      return;
+    }
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setFormError("Informe um valor valido para o gasto.");
+      return;
+    }
+
+    setForm((current) => ({
+      ...current,
+      expenses: [
+        ...current.expenses,
+        { description, category: newExpense.category.trim() || undefined, amount },
+      ],
+    }));
+    setNewExpense(createInitialNewExpense());
+    setFormError("");
+  };
+
+  const removeExpenseFromForm = (idx: number) => {
+    setForm((current) => ({
+      ...current,
+      expenses: current.expenses.filter((_, i) => i !== idx),
+    }));
   };
 
   const removeMaterial = (idx: number) => {
@@ -654,7 +764,10 @@ const ProductionPage = () => {
     setFormError("");
     setProductsError("");
     setForm(createInitialForm());
-    setNewMaterial({ productId: "", quantity: 1, unit: "unidade" });
+    setNewMaterial({ productId: "", quantity: 1, unit: "unidade", unitPrice: 0 });
+    setIsNewProductMode(false);
+    setNewProduct(createInitialNewProduct());
+    setNewExpense(createInitialNewExpense());
   };
 
   const openCreateModal = () => {
@@ -944,6 +1057,7 @@ const ProductionPage = () => {
         budgetId: form.budgetId || undefined,
         initialCost: Number(form.initialCost),
         materials: form.materials,
+        expenses: form.expenses,
       });
 
       closeModal();
@@ -1038,8 +1152,6 @@ const ProductionPage = () => {
           order.id === orderId ? updated : order,
         ),
       );
-
-      await loadProductions();
 
       if (updated.productionStatus === "approved") {
         dispatchInventoryRefresh({
@@ -1144,7 +1256,6 @@ const ProductionPage = () => {
       });
 
       setData((current) => current.map((order) => (order.id === updated.id ? updated : order)));
-      await loadProductions();
       closeEditStatusesModal(true);
 
       toast({
@@ -1222,63 +1333,219 @@ const ProductionPage = () => {
     }
   };
 
+  const loadCostReport = async (productionId: string) => {
+    setIsLoadingReport(true);
+    setReportError("");
+
+    try {
+      setCostReport(await getProductionCostReport(productionId));
+    } catch (error) {
+      setCostReport(null);
+      setReportError(error instanceof Error ? error.message : "Falha ao carregar o relatorio de custos.");
+    } finally {
+      setIsLoadingReport(false);
+    }
+  };
+
+  const openReportModal = (order: EmployeeProduction) => {
+    setReportOrder(order);
+    setCostReport(null);
+    setReportExpense(createInitialNewExpense());
+
+    if (isMockMode) {
+      setReportError("No modo local/mock, o relatorio de custos nao esta disponivel.");
+      return;
+    }
+
+    void loadCostReport(order.id);
+  };
+
+  const closeReportModal = () => {
+    setReportOrder(null);
+    setCostReport(null);
+    setReportError("");
+  };
+
+  const saveReportExpense = async () => {
+    if (!reportOrder || isSavingExpense) {
+      return;
+    }
+
+    const description = reportExpense.description.trim();
+    const amount = Number(reportExpense.amount);
+
+    if (!description || !Number.isFinite(amount) || amount <= 0) {
+      setReportError("Informe a descricao e um valor maior que zero para o gasto.");
+      return;
+    }
+
+    setIsSavingExpense(true);
+    setReportError("");
+
+    try {
+      await addProductionExpense(reportOrder.id, {
+        description,
+        category: reportExpense.category.trim() || undefined,
+        amount,
+      });
+      setReportExpense(createInitialNewExpense());
+      await loadCostReport(reportOrder.id);
+    } catch (error) {
+      setReportError(error instanceof Error ? error.message : "Falha ao registrar o gasto.");
+    } finally {
+      setIsSavingExpense(false);
+    }
+  };
+
+  const removeReportExpense = async (expenseId: string) => {
+    if (!reportOrder || isSavingExpense) {
+      return;
+    }
+
+    setIsSavingExpense(true);
+    setReportError("");
+
+    try {
+      await deleteProductionExpense(reportOrder.id, expenseId);
+      await loadCostReport(reportOrder.id);
+    } catch (error) {
+      setReportError(error instanceof Error ? error.message : "Falha ao remover o gasto.");
+    } finally {
+      setIsSavingExpense(false);
+    }
+  };
+
+  const printCostReport = () => {
+    if (!costReport) {
+      return;
+    }
+
+    const escapeHtml = (value: string) =>
+      value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+    const materialRows = costReport.materials
+      .map(
+        (m) =>
+          `<tr><td>${escapeHtml(m.productName)}</td><td class="r">${m.quantity} ${escapeHtml(m.unit)}</td><td class="r">${formatCurrency(m.unitPrice)}</td><td class="r">${formatCurrency(m.subtotal)}</td></tr>`,
+      )
+      .join("");
+    const expenseRows = costReport.expenses
+      .map(
+        (e) =>
+          `<tr><td>${escapeHtml(e.description)}</td><td>${escapeHtml(e.category || "-")}</td><td>${e.createdAt ? new Date(e.createdAt).toLocaleDateString("pt-BR") : "-"}</td><td class="r">${formatCurrency(e.amount)}</td></tr>`,
+      )
+      .join("");
+
+    const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Relatorio de custos</title>
+<style>body{font-family:Arial,sans-serif;padding:24px;color:#111}h1{font-size:20px;margin:0 0 4px}h2{font-size:14px;margin:20px 0 6px}
+table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px solid #ddd;padding:6px;text-align:left}.r{text-align:right}
+.total td{font-weight:bold}.muted{color:#666;font-size:12px}</style></head><body>
+<h1>Relatorio de custos ${costReport.isFinal ? "(final)" : "(parcial)"}</h1>
+<p class="muted">${escapeHtml(costReport.production.clientName)} - ${escapeHtml(costReport.production.description)}<br>Gerado em ${new Date(costReport.generatedAt).toLocaleString("pt-BR")}</p>
+<h2>Materiais</h2><table><tr><th>Produto</th><th class="r">Qtd.</th><th class="r">Preco unit.</th><th class="r">Subtotal</th></tr>${materialRows || '<tr><td colspan="4">Nenhum material.</td></tr>'}
+<tr class="total"><td colspan="3">Total de materiais</td><td class="r">${formatCurrency(costReport.materialsTotal)}</td></tr></table>
+<h2>Gastos lancados</h2><table><tr><th>Descricao</th><th>Categoria</th><th>Data</th><th class="r">Valor</th></tr>${expenseRows || '<tr><td colspan="4">Nenhum gasto lancado.</td></tr>'}
+<tr class="total"><td colspan="3">Total de gastos</td><td class="r">${formatCurrency(costReport.expensesTotal)}</td></tr></table>
+<h2>Resumo</h2><table>
+<tr><td>Custo inicial previsto</td><td class="r">${formatCurrency(costReport.initialCost)}</td></tr>
+<tr class="total"><td>Total gasto ate agora</td><td class="r">${formatCurrency(costReport.totalSpent)}</td></tr>
+<tr class="total"><td>Saldo (previsto - gasto)</td><td class="r">${formatCurrency(costReport.balance)}</td></tr></table>
+<script>window.onload=function(){window.print()}</script></body></html>`;
+
+    const printWindow = window.open("", "_blank");
+
+    if (!printWindow) {
+      toast({
+        variant: "destructive",
+        title: "Nao foi possivel imprimir",
+        description: "O navegador bloqueou a janela de impressao. Libere pop-ups para este site.",
+      });
+      return;
+    }
+
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
+
+  const isProductionInProgress = (order: EmployeeProduction) => {
+    const status = order.productionStatus.toLowerCase();
+    return !["approved", "aprovad", "delivered", "entreg", "completed", "concluid"].some((keyword) =>
+      status.includes(keyword),
+    );
+  };
+
+  const removeProduction = async (order: EmployeeProduction) => {
+    if (sharingId || updatingId || deletingId) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Excluir a producao de "${order.clientName}"?\n\nEsta acao nao pode ser desfeita.`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingId(order.id);
+
+    try {
+      if (!isMockMode) {
+        await deleteProduction(order.id);
+      }
+
+      setData((current) => current.filter((item) => item.id !== order.id));
+      toast({
+        title: "Producao excluida",
+        description: `A producao de ${order.clientName} foi removida.`,
+      });
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Nao foi possivel excluir",
+        description: error instanceof Error ? error.message : "Falha ao excluir producao.",
+      });
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   const isAdvancingSelected = Boolean(selectedToAdvance && updatingId === selectedToAdvance.id);
   const isManagingSelectedImages = Boolean(selectedForImages && (isLoadingImages || isUploadingImages));
+
+  const visibleData = useMemo(
+    () => (showAll ? data : data.filter(isProductionInProgress)),
+    [data, showAll],
+  );
 
   const productionStatusSummary = useMemo(() => {
     const counts = new Map<string, number>();
 
-    data.forEach((order) => {
+    visibleData.forEach((order) => {
       const key = order.productionStatus || "pending";
       counts.set(key, (counts.get(key) || 0) + 1);
     });
 
     return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
-  }, [data]);
+  }, [visibleData]);
 
   const columns = [
     { key: "clientName", header: "Cliente" },
     { key: "description", header: "Descrição" },
-    {
-      key: "materials",
-      header: "Materiais",
-      render: (o: EmployeeProduction) => (
-        <span className="text-xs text-foreground/80">
-          {o.materials.map((m) => `${m.productName} (${m.quantity} ${m.unit})`).join(", ")}
-        </span>
-      ),
-    },
-    {
-      key: "initialCost",
-      header: "Custo Inicial",
-      mono: true,
-      render: (o: EmployeeProduction) => formatCurrency(o.initialCost),
-    },
+    ...(isEmployee
+      ? []
+      : [
+          {
+            key: "initialCost",
+            header: "Custo Inicial",
+            mono: true,
+            render: (o: EmployeeProduction) => formatCurrency(o.initialCost),
+          },
+        ]),
     {
       key: "productionStatus",
       header: "Status",
       render: (o: EmployeeProduction) => <StatusBadge status={String(o.productionStatus || "pending")} />,
-    },
-    {
-      key: "statuses",
-      header: "Etapas ativas",
-      render: (o: EmployeeProduction) =>
-        o.statuses.length === 0 ? (
-          <span className="text-xs text-muted-foreground">Sem etapas ativas.</span>
-        ) : (
-          <div className="flex flex-wrap gap-1.5 max-w-[360px]">
-            {o.statuses.map((status) => (
-              <span
-                key={status.id}
-                className="inline-flex flex-col rounded border border-border bg-secondary/20 px-2 py-1"
-                title={status.createdAt ? new Date(status.createdAt).toLocaleString("pt-BR") : ""}
-              >
-                <span className="text-[11px] font-bold text-foreground leading-tight">{formatStageLabel(status.stageName)}</span>
-                <span className="text-[10px] text-muted-foreground leading-tight">{status.teamName || "Equipe nao informada"}</span>
-              </span>
-            ))}
-          </div>
-        ),
     },
     { key: "deliveryDate", header: "Entrega", mono: true },
     { key: "installationTeam", header: "Equipe" },
@@ -1288,59 +1555,90 @@ const ProductionPage = () => {
             key: "actions",
             header: "",
             render: (o: EmployeeProduction) => {
-              const isSharingCurrent = sharingId === o.id;
               const isAdvancingCurrent = updatingId === o.id;
-              const isManagingImagesCurrent =
-                selectedForImages?.id === o.id && (isLoadingImages || isUploadingImages);
+              const isBusy = Boolean(updatingId) || Boolean(sharingId) || Boolean(deletingId);
+              const iconButtonClass =
+                "inline-flex items-center justify-center h-7 w-7 rounded border border-border text-foreground hover:bg-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
 
               return (
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1.5">
                   <button
-                    disabled={Boolean(sharingId) || Boolean(updatingId) || isLoadingImages || isUploadingImages}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openImagesModal(o);
-                    }}
-                    className="inline-flex items-center gap-1.5 px-2 py-1 text-[11px] font-bold rounded border border-border text-foreground hover:bg-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <ImagePlus className="h-3 w-3" />
-                    {isManagingImagesCurrent ? "IMAGENS..." : "IMAGENS"}
-                  </button>
-
-                  <button
-                    disabled={Boolean(sharingId) || Boolean(updatingId)}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void shareProduction(o);
-                    }}
-                    className="inline-flex items-center gap-1.5 px-2 py-1 text-[11px] font-bold rounded border border-primary/30 text-primary hover:bg-primary/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <Share2 className="h-3 w-3" />
-                    {isSharingCurrent ? "GERANDO LINK..." : "COMPARTILHAR PRODUCAO"}
-                  </button>
-
-                  <button
-                    disabled={Boolean(updatingId) || Boolean(sharingId)}
+                    disabled={isBusy}
                     onClick={(e) => {
                       e.stopPropagation();
                       openAdvanceModal(o);
                     }}
-                    className="px-2 py-1 text-[11px] font-bold rounded bg-success/20 text-success hover:bg-success/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="px-2.5 py-1 text-[11px] font-bold rounded bg-success/20 text-success hover:bg-success/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                   >
-                    {isAdvancingCurrent ? "AVANCANDO..." : "AVANCAR ETAPA"}
+                    {isAdvancingCurrent ? "AVANCANDO..." : "AVANÇAR ETAPA"}
                   </button>
 
                   <button
-                    disabled={Boolean(updatingId) || Boolean(sharingId)}
+                    title="Editar etapas"
+                    aria-label="Editar etapas"
+                    disabled={isBusy}
                     onClick={(e) => {
                       e.stopPropagation();
                       openEditStatusesModal(o);
                     }}
-                    className="inline-flex items-center gap-1.5 px-2 py-1 text-[11px] font-bold rounded border border-border text-foreground hover:bg-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className={iconButtonClass}
                   >
-                    <Pencil className="h-3 w-3" />
-                    EDITAR ETAPAS
+                    <Pencil className="h-3.5 w-3.5" />
                   </button>
+
+                  <button
+                    title="Custos e relatório"
+                    aria-label="Custos e relatório"
+                    disabled={isBusy}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openReportModal(o);
+                    }}
+                    className={iconButtonClass}
+                  >
+                    <Receipt className="h-3.5 w-3.5" />
+                  </button>
+
+                  <button
+                    title="Imagens"
+                    aria-label="Imagens"
+                    disabled={isBusy || isLoadingImages || isUploadingImages}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openImagesModal(o);
+                    }}
+                    className={iconButtonClass}
+                  >
+                    <ImagePlus className="h-3.5 w-3.5" />
+                  </button>
+
+                  <button
+                    title="Copiar link de acompanhamento"
+                    aria-label="Copiar link de acompanhamento"
+                    disabled={isBusy}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void shareProduction(o);
+                    }}
+                    className={iconButtonClass}
+                  >
+                    <Share2 className={`h-3.5 w-3.5 ${sharingId === o.id ? "animate-pulse text-primary" : ""}`} />
+                  </button>
+
+                  {isProductionInProgress(o) && (
+                    <button
+                      title="Excluir produção"
+                      aria-label="Excluir produção"
+                      disabled={isBusy}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void removeProduction(o);
+                      }}
+                      className="inline-flex items-center justify-center h-7 w-7 rounded border border-destructive/40 text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Trash2 className={`h-3.5 w-3.5 ${deletingId === o.id ? "animate-pulse" : ""}`} />
+                    </button>
+                  )}
                 </div>
               );
             },
@@ -1381,7 +1679,27 @@ const ProductionPage = () => {
           </div>
         )}
 
-        <div className="flex gap-3 flex-wrap">
+        <div className="flex gap-3 flex-wrap items-center">
+          <div className="inline-flex rounded border border-border overflow-hidden text-xs font-bold">
+            {([
+              { value: false, label: "EM ANDAMENTO" },
+              { value: true, label: "TODAS" },
+            ] as const).map((option) => (
+              <button
+                key={option.label}
+                type="button"
+                onClick={() => setShowAll(option.value)}
+                className={`px-3 py-1.5 transition-colors ${
+                  showAll === option.value
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-card text-muted-foreground hover:bg-secondary"
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+
           {productionStatusSummary.map(([status, count]) => (
             <div key={status} className="flex items-center gap-2 px-3 py-1.5 border border-border rounded bg-card text-sm">
               <StatusBadge status={status} />
@@ -1391,8 +1709,51 @@ const ProductionPage = () => {
         </div>
         <DataTable
           columns={columns}
-          data={data}
-          emptyMessage={isLoading ? "Carregando produções do banco..." : "Nenhuma produção cadastrada no banco."}
+          data={visibleData}
+          renderExpanded={(o) => (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+              <div>
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-2">Etapas ativas</p>
+                {o.statuses.length === 0 ? (
+                  <p className="text-muted-foreground">Sem etapas ativas.</p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {o.statuses.map((status) => (
+                      <span
+                        key={status.id}
+                        className="inline-flex flex-col rounded border border-border bg-card px-2 py-1"
+                        title={status.createdAt ? new Date(status.createdAt).toLocaleString("pt-BR") : ""}
+                      >
+                        <span className="text-[11px] font-bold text-foreground leading-tight">{formatStageLabel(status.stageName)}</span>
+                        <span className="text-[10px] text-muted-foreground leading-tight">{status.teamName || "Equipe nao informada"}</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-2">Materiais</p>
+                {o.materials.length === 0 ? (
+                  <p className="text-muted-foreground">Nenhum material.</p>
+                ) : (
+                  <ul className="space-y-0.5 text-foreground/80">
+                    {o.materials.map((m, index) => (
+                      <li key={`${m.productId ?? m.productName}-${index}`}>
+                        {m.productName} — {m.quantity} {m.unit}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          )}
+          emptyMessage={
+            isLoading
+              ? "Carregando produções..."
+              : showAll
+                ? "Nenhuma produção cadastrada."
+                : "Nenhuma produção em andamento."
+          }
         />
       </div>
 
@@ -1547,6 +1908,11 @@ const ProductionPage = () => {
                     <div key={`${item.productId}-${idx}`} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
                       <span>
                         {item.productName} x {item.quantity} {item.unit}
+                        {item.unitPrice ? (
+                          <span className="ml-2 text-xs text-muted-foreground">
+                            {formatCurrency(item.unitPrice)}/un = {formatCurrency(item.unitPrice * item.quantity)}
+                          </span>
+                        ) : null}
                       </span>
                       <button
                         onClick={() => removeMaterial(idx)}
@@ -1559,20 +1925,84 @@ const ProductionPage = () => {
                 </div>
               )}
 
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                <div className="flex-1">
-                  <FormField
-                    label="Produto"
-                    as="select"
-                    value={newMaterial.productId}
-                    onChange={(e) => setNewMaterial((current) => ({ ...current, productId: e.target.value }))}
-                    options={productsCatalog.map((product) => ({
-                      value: product.id,
-                      label: `${product.name} (Saldo: ${product.stockQuantity})`,
-                    }))}
-                  />
+              <div className="mb-3 flex flex-wrap gap-2">
+                {([
+                  { value: false, label: "Produto do estoque" },
+                  { value: true, label: "Cadastrar produto novo" },
+                ] as const).map((option) => (
+                  <button
+                    key={option.label}
+                    type="button"
+                    onClick={() => setIsNewProductMode(option.value)}
+                    className={`px-3 py-1 text-[11px] font-bold rounded border transition-colors ${
+                      isNewProductMode === option.value
+                        ? "border-primary/40 bg-primary/10 text-primary"
+                        : "border-border text-muted-foreground hover:bg-secondary"
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+
+              {isNewProductMode ? (
+                <div className="space-y-2">
+                  <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                    <div className="md:col-span-2">
+                      <FormField
+                        label="Nome do produto"
+                        value={newProduct.name}
+                        onChange={(e) => setNewProduct((current) => ({ ...current, name: e.target.value }))}
+                        placeholder="Ex.: Dobradiça soft-close"
+                      />
+                    </div>
+                    <FormField
+                      label="Quantidade comprada"
+                      type="number"
+                      min={1}
+                      step="1"
+                      value={newProduct.quantity}
+                      onChange={(e) => setNewProduct((current) => ({ ...current, quantity: Number(e.target.value) }))}
+                    />
+                    <FormField
+                      label="Unidade"
+                      value={newProduct.unit}
+                      onChange={(e) => setNewProduct((current) => ({ ...current, unit: e.target.value }))}
+                    />
+                    <FormField
+                      label="Preço unitário (R$)"
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={newProduct.unitPrice}
+                      onChange={(e) => setNewProduct((current) => ({ ...current, unitPrice: Number(e.target.value) }))}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    O produto é cadastrado no estoque com a quantidade comprada e já entra nos materiais deste projeto.
+                  </p>
+                  <button
+                    onClick={() => void addNewProductAsMaterial()}
+                    disabled={isCreatingProduct}
+                    className="px-3 py-2 text-xs font-bold rounded border border-primary/40 text-primary hover:bg-primary/10 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {isCreatingProduct ? "CADASTRANDO..." : "CADASTRAR E ADICIONAR"}
+                  </button>
                 </div>
-                <div className="w-full md:w-28">
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                  <div className="md:col-span-2">
+                    <FormField
+                      label="Produto"
+                      as="select"
+                      value={newMaterial.productId}
+                      onChange={(e) => setNewMaterial((current) => ({ ...current, productId: e.target.value }))}
+                      options={productsCatalog.map((product) => ({
+                        value: product.id,
+                        label: `${product.name} (Saldo: ${product.stockQuantity})`,
+                      }))}
+                    />
+                  </div>
                   <FormField
                     label="Quantidade"
                     type="number"
@@ -1581,24 +2011,89 @@ const ProductionPage = () => {
                     value={newMaterial.quantity}
                     onChange={(e) => setNewMaterial((current) => ({ ...current, quantity: Number(e.target.value) }))}
                   />
-                </div>
-                <div className="w-full md:w-28">
                   <FormField
                     label="Unidade"
                     value={newMaterial.unit}
                     onChange={(e) => setNewMaterial((current) => ({ ...current, unit: e.target.value }))}
                   />
+                  <FormField
+                    label="Preço unitário (R$)"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={newMaterial.unitPrice}
+                    onChange={(e) => setNewMaterial((current) => ({ ...current, unitPrice: Number(e.target.value) }))}
+                  />
+                  <div className="flex items-end md:col-span-5">
+                    <button
+                      onClick={addMaterial}
+                      disabled={isLoadingProducts || productsCatalog.length === 0}
+                      className="px-3 py-2 text-xs font-bold rounded border border-border hover:bg-secondary transition-colors text-foreground disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {isLoadingProducts ? "CARREGANDO..." : "ADICIONAR"}
+                    </button>
+                  </div>
                 </div>
-                <div className="flex items-end">
-                  <button
-                    onClick={addMaterial}
-                    disabled={isLoadingProducts || productsCatalog.length === 0}
-                    className="px-3 py-2 text-xs font-bold rounded border border-border hover:bg-secondary transition-colors text-foreground disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    {isLoadingProducts ? "CARREGANDO..." : "ADICIONAR"}
-                  </button>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-3">
+                Gastos do projeto (opcional)
+              </p>
+
+              {form.expenses.length > 0 && (
+                <div className="border border-border rounded mb-3 divide-y divide-border/50">
+                  {form.expenses.map((expense, idx) => (
+                    <div key={`${expense.description}-${idx}`} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
+                      <span>
+                        {expense.description}
+                        {expense.category ? (
+                          <span className="ml-2 text-xs text-muted-foreground">{expense.category}</span>
+                        ) : null}
+                        <span className="ml-2 font-mono text-xs">{formatCurrency(expense.amount)}</span>
+                      </span>
+                      <button
+                        onClick={() => removeExpenseFromForm(idx)}
+                        className="text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
                 </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                <div className="md:col-span-2">
+                  <FormField
+                    label="Descrição do gasto"
+                    value={newExpense.description}
+                    onChange={(e) => setNewExpense((current) => ({ ...current, description: e.target.value }))}
+                    placeholder="Ex.: Frete, ferragens, terceirizado"
+                  />
+                </div>
+                <FormField
+                  label="Categoria"
+                  value={newExpense.category}
+                  onChange={(e) => setNewExpense((current) => ({ ...current, category: e.target.value }))}
+                  placeholder="Opcional"
+                />
+                <FormField
+                  label="Valor (R$)"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={newExpense.amount}
+                  onChange={(e) => setNewExpense((current) => ({ ...current, amount: Number(e.target.value) }))}
+                />
               </div>
+              <button
+                onClick={addExpenseToForm}
+                className="mt-3 px-3 py-2 text-xs font-bold rounded border border-border hover:bg-secondary transition-colors text-foreground"
+              >
+                ADICIONAR GASTO
+              </button>
             </div>
 
             {formError && <p className="text-sm text-destructive">{formError}</p>}
@@ -2047,6 +2542,172 @@ const ProductionPage = () => {
                 className="px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {updatingId === selectedToEditStatuses.id ? "Salvando..." : "Salvar etapas"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {canCompleteProduction && reportOrder && (
+        <Modal
+          open={Boolean(reportOrder)}
+          onClose={closeReportModal}
+          title={`Custos - ${reportOrder.clientName}`}
+          width="max-w-3xl"
+        >
+          <div className="space-y-4 max-h-[75dvh] overflow-y-auto pr-1">
+            {reportError && (
+              <div className="rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {reportError}
+              </div>
+            )}
+
+            {isLoadingReport && !costReport && (
+              <p className="text-sm text-muted-foreground animate-pulse">Carregando relatório...</p>
+            )}
+
+            {costReport && (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span
+                    className={`px-2 py-1 rounded text-[11px] font-bold ${
+                      costReport.isFinal ? "bg-success/20 text-success" : "bg-amber-100 text-amber-900"
+                    }`}
+                  >
+                    {costReport.isFinal ? "RELATÓRIO FINAL" : "RELATÓRIO PARCIAL (em andamento)"}
+                  </span>
+                  <button
+                    onClick={printCostReport}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded border border-border hover:bg-secondary transition-colors"
+                  >
+                    <Printer className="h-3.5 w-3.5" /> IMPRIMIR / SALVAR PDF
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                  <div className="border border-border rounded p-3 bg-secondary/20">
+                    <p className="text-muted-foreground">Custo inicial previsto</p>
+                    <p className="font-mono font-bold text-foreground">{formatCurrency(costReport.initialCost)}</p>
+                  </div>
+                  <div className="border border-border rounded p-3 bg-secondary/20">
+                    <p className="text-muted-foreground">Total gasto até agora</p>
+                    <p className="font-mono font-bold text-primary">{formatCurrency(costReport.totalSpent)}</p>
+                  </div>
+                  <div className="border border-border rounded p-3 bg-secondary/20">
+                    <p className="text-muted-foreground">Saldo (previsto - gasto)</p>
+                    <p
+                      className={`font-mono font-bold ${
+                        costReport.balance < 0 ? "text-destructive" : "text-foreground"
+                      }`}
+                    >
+                      {formatCurrency(costReport.balance)}
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-2">
+                    Materiais ({formatCurrency(costReport.materialsTotal)})
+                  </p>
+                  {costReport.materials.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">Nenhum material.</p>
+                  ) : (
+                    <div className="border border-border rounded divide-y divide-border/50 text-sm">
+                      {costReport.materials.map((material, index) => (
+                        <div key={`${material.productName}-${index}`} className="flex flex-wrap justify-between gap-2 px-3 py-2">
+                          <span>
+                            {material.productName} — {material.quantity} {material.unit}
+                            {material.unitPrice === 0 && (
+                              <span className="ml-2 text-[11px] text-amber-700">sem preço informado</span>
+                            )}
+                          </span>
+                          <span className="font-mono text-xs">
+                            {formatCurrency(material.unitPrice)} = {formatCurrency(material.subtotal)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-2">
+                    Gastos lançados ({formatCurrency(costReport.expensesTotal)})
+                  </p>
+                  {costReport.expenses.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">Nenhum gasto lançado.</p>
+                  ) : (
+                    <div className="border border-border rounded divide-y divide-border/50 text-sm">
+                      {costReport.expenses.map((expense) => (
+                        <div key={expense.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                          <span>
+                            {expense.description}
+                            <span className="ml-2 text-[11px] text-muted-foreground">
+                              {[expense.category, expense.createdAt ? new Date(expense.createdAt).toLocaleDateString("pt-BR") : ""]
+                                .filter(Boolean)
+                                .join(" • ")}
+                            </span>
+                          </span>
+                          <span className="flex items-center gap-3">
+                            <span className="font-mono text-xs">{formatCurrency(expense.amount)}</span>
+                            <button
+                              title="Remover gasto"
+                              aria-label="Remover gasto"
+                              disabled={isSavingExpense}
+                              onClick={() => void removeReportExpense(expense.id)}
+                              className="text-muted-foreground hover:text-destructive disabled:opacity-50"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="border border-border rounded p-3 space-y-3">
+                  <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Lançar novo gasto</p>
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                    <div className="md:col-span-2">
+                      <FormField
+                        label="Descrição"
+                        value={reportExpense.description}
+                        onChange={(e) => setReportExpense((current) => ({ ...current, description: e.target.value }))}
+                        placeholder="Ex.: Frete, ferragens"
+                      />
+                    </div>
+                    <FormField
+                      label="Categoria"
+                      value={reportExpense.category}
+                      onChange={(e) => setReportExpense((current) => ({ ...current, category: e.target.value }))}
+                      placeholder="Opcional"
+                    />
+                    <FormField
+                      label="Valor (R$)"
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={reportExpense.amount}
+                      onChange={(e) => setReportExpense((current) => ({ ...current, amount: Number(e.target.value) }))}
+                    />
+                  </div>
+                  <button
+                    onClick={() => void saveReportExpense()}
+                    disabled={isSavingExpense}
+                    className="px-3 py-2 text-xs font-bold rounded bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {isSavingExpense ? "SALVANDO..." : "LANÇAR GASTO"}
+                  </button>
+                </div>
+              </>
+            )}
+
+            <div className="flex justify-end">
+              <button
+                onClick={closeReportModal}
+                className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground"
+              >
+                Fechar
               </button>
             </div>
           </div>

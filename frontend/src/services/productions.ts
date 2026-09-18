@@ -70,6 +70,47 @@ export interface CreateProductionInput {
   budgetId?: string;
   initialCost: number;
   materials: ProductionMaterial[];
+  expenses?: ProductionExpenseInput[];
+}
+
+export interface ProductionExpenseInput {
+  description: string;
+  category?: string;
+  amount: number;
+}
+
+export interface ProductionExpense {
+  id: string;
+  productionId: string;
+  description: string;
+  category: string | null;
+  amount: number;
+  createdAt: string;
+}
+
+export interface ProductionCostReport {
+  production: {
+    id: string;
+    clientName: string;
+    description: string;
+    productionStatus: string;
+    deliveryDate: string | null;
+  };
+  isFinal: boolean;
+  generatedAt: string;
+  initialCost: number;
+  materials: Array<{
+    productName: string;
+    quantity: number;
+    unit: string;
+    unitPrice: number;
+    subtotal: number;
+  }>;
+  materialsTotal: number;
+  expenses: ProductionExpense[];
+  expensesTotal: number;
+  totalSpent: number;
+  balance: number;
 }
 
 export type AdvanceProductionStatusInput =
@@ -714,6 +755,7 @@ const mapMaterial = (value: unknown): ProductionMaterial | null => {
     productName: toStringSafe(material.productName ?? material.product_name, "Material"),
     quantity: toNumber(material.quantity),
     unit: toStringSafe(material.unit, "unidade"),
+    unitPrice: toNumber(material.unitPrice ?? material.unit_price),
   };
 };
 
@@ -930,6 +972,109 @@ export const createProduction = async (input: CreateProductionInput) => {
   });
 
   return ensureProduction(payload, "Nao foi possivel criar a producao.");
+};
+
+const mapExpense = (value: unknown): ProductionExpense | null => {
+  const item = toRecord(value);
+  const id = item ? toStringSafe(item.id, "").trim() : "";
+
+  if (!item || !id) {
+    return null;
+  }
+
+  return {
+    id,
+    productionId: toStringSafe(item.productionId ?? item.production_id, ""),
+    description: toStringSafe(item.description, ""),
+    category: toStringSafe(item.category, "").trim() || null,
+    amount: toNumber(item.amount),
+    createdAt: toStringSafe(item.createdAt ?? item.created_at, ""),
+  };
+};
+
+export const addProductionExpense = async (productionId: string, input: ProductionExpenseInput) => {
+  const payload = await request<unknown>(`/productions/${encodeURIComponent(productionId)}/expenses`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+  const expense = mapExpense(unwrapDataEnvelope(payload));
+
+  if (!expense) {
+    throw new Error("Nao foi possivel registrar o gasto.");
+  }
+
+  return expense;
+};
+
+export const deleteProductionExpense = async (productionId: string, expenseId: string) => {
+  await request<unknown>(
+    `/productions/${encodeURIComponent(productionId)}/expenses/${encodeURIComponent(expenseId)}`,
+    { method: "DELETE" },
+  );
+};
+
+export const getProductionCostReport = async (productionId: string): Promise<ProductionCostReport> => {
+  const payload = await request<unknown>(`/productions/${encodeURIComponent(productionId)}/cost-report`);
+  const data = toRecord(unwrapDataEnvelope(payload));
+
+  if (!data) {
+    throw new Error("Nao foi possivel carregar o relatorio de custos.");
+  }
+
+  const production = toRecord(data.production) ?? {};
+  const materials = Array.isArray(data.materials) ? data.materials : [];
+  const expenses = Array.isArray(data.expenses) ? data.expenses : [];
+
+  return {
+    production: {
+      id: toStringSafe(production.id, productionId),
+      clientName: toStringSafe(production.clientName, ""),
+      description: toStringSafe(production.description, ""),
+      productionStatus: toStringSafe(production.productionStatus, ""),
+      deliveryDate: toStringSafe(production.deliveryDate, "") || null,
+    },
+    isFinal: Boolean(data.isFinal),
+    generatedAt: toStringSafe(data.generatedAt, new Date().toISOString()),
+    initialCost: toNumber(data.initialCost),
+    materials: materials.map((value) => {
+      const item = toRecord(value) ?? {};
+
+      return {
+        productName: toStringSafe(item.productName, "Material"),
+        quantity: toNumber(item.quantity),
+        unit: toStringSafe(item.unit, "unidade"),
+        unitPrice: toNumber(item.unitPrice),
+        subtotal: toNumber(item.subtotal),
+      };
+    }),
+    materialsTotal: toNumber(data.materialsTotal),
+    expenses: expenses.map(mapExpense).filter((item): item is ProductionExpense => Boolean(item)),
+    expensesTotal: toNumber(data.expensesTotal),
+    totalSpent: toNumber(data.totalSpent),
+    balance: toNumber(data.balance),
+  };
+};
+
+export const deleteProduction = async (productionId: string) => {
+  try {
+    await request<unknown>(`/productions/${encodeURIComponent(productionId)}`, {
+      method: "DELETE",
+    });
+  } catch (error) {
+    if (error instanceof ApiError) {
+      switch (error.status) {
+        case 403:
+          throw new Error("Acesso negado. Apenas admin e gerente podem excluir producao.");
+        case 404:
+          throw new Error("Producao nao encontrada. Ela pode ja ter sido excluida.");
+        case 409:
+          throw new Error("Apenas producoes em andamento podem ser excluidas.");
+      }
+    }
+
+    throw error;
+  }
 };
 
 export const listProductionImages = async (productionId: string): Promise<ProductionImage[]> => {
