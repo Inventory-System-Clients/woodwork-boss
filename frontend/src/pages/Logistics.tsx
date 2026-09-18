@@ -13,7 +13,6 @@ import {
   type LogisticsMonthlyClosing,
   upsertLogisticsMonthlyClosing,
 } from "@/services/logistics";
-import { listStockMovements } from "@/services/stock";
 import { listTeams } from "@/services/teams";
 import { listEmployees } from "@/services/employees";
 import { useRoleAccess } from "@/auth/AuthProvider";
@@ -317,7 +316,6 @@ const LogisticsPage = () => {
         employeesResult,
         budgetsResult,
         materialConsumptionResult,
-        stockMovementsFallbackResult,
       ] = await Promise.allSettled([
         listProductions({ active: true }),
         listTeams(),
@@ -326,15 +324,6 @@ const LogisticsPage = () => {
         listActiveProductionMaterialConsumption({
           startDate: filterDateStart || undefined,
           endDate: filterDateEnd || undefined,
-        }),
-        listStockMovements({
-          movementType: "saida",
-          referenceType: "production",
-          activeOnly: true,
-          startDate: filterDateStart || undefined,
-          endDate: filterDateEnd || undefined,
-          limit: 200,
-          offset: 0,
         }),
       ]);
 
@@ -355,7 +344,7 @@ const LogisticsPage = () => {
         warnings.push("Não foi possível obter orçamentos do banco para calcular lucro e receita na logística.");
       }
 
-      if (materialConsumptionResult.status === "fulfilled" && materialConsumptionResult.value.data.length > 0) {
+      if (materialConsumptionResult.status === "fulfilled") {
         setMaterialUsageRows(
           materialConsumptionResult.value.data.map((item) => ({
             id: item.productId,
@@ -363,55 +352,6 @@ const LogisticsPage = () => {
             unit: item.unit || "unidade",
             totalQuantity: item.totalQuantityUsed,
             productionsCount: item.activeProductionsCount,
-          })),
-        );
-      } else if (stockMovementsFallbackResult.status === "fulfilled") {
-        const movementsResult = stockMovementsFallbackResult;
-        const grouped = new Map<
-          string,
-          {
-            id: string;
-            material: string;
-            unit: string;
-            totalQuantity: number;
-            productionIds: Set<string>;
-          }
-        >();
-
-        movementsResult.value.data.forEach((movement) => {
-          const key = movement.productId || movement.productName;
-
-          if (!key) {
-            return;
-          }
-
-          const current = grouped.get(key);
-
-          if (!current) {
-            grouped.set(key, {
-              id: key,
-              material: movement.productName || "Produto",
-              unit: movement.unit || "unidade",
-              totalQuantity: Math.max(0, Number(movement.quantity) || 0),
-              productionIds: new Set(movement.referenceId ? [movement.referenceId] : []),
-            });
-            return;
-          }
-
-          current.totalQuantity += Math.max(0, Number(movement.quantity) || 0);
-
-          if (movement.referenceId) {
-            current.productionIds.add(movement.referenceId);
-          }
-        });
-
-        setMaterialUsageRows(
-          Array.from(grouped.values()).map((row) => ({
-            id: row.id,
-            material: row.material,
-            unit: row.unit,
-            totalQuantity: row.totalQuantity,
-            productionsCount: row.productionIds.size,
           })),
         );
       } else {

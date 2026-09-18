@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, User, Briefcase, Box, Package, FileText, Hammer, Truck, Clock } from "lucide-react";
+import { LayoutDashboard, Users, User, Briefcase, Box, FileText, Hammer, Truck, Clock } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useAuth } from "@/auth/AuthProvider";
 import type { UserRole } from "@/auth/types";
@@ -19,8 +19,7 @@ const navItems = [
   { title: "Clientes", url: "/clients", icon: Users, allowedRoles: ["admin", "gerente"] },
   { title: "Funcionários", url: "/employees", icon: User, allowedRoles: ["admin", "gerente"] },
   { title: "Equipes", url: "/teams", icon: Briefcase, allowedRoles: ["admin", "gerente"] },
-  { title: "Estoque", url: "/products", icon: Box, allowedRoles: ["admin", "gerente"] },
-  { title: "Movimentação de Estoque", url: "/stock", icon: Package, allowedRoles: ["admin", "gerente"] },
+  { title: "Produtos", url: "/products", icon: Box, allowedRoles: ["admin", "gerente"] },
   { title: "Orçamentos", url: "/budgets", icon: FileText, allowedRoles: ["admin", "gerente"] },
   { title: "Produção", url: "/production", icon: Hammer, allowedRoles: ["admin", "gerente", "funcionario"] },
   { title: "Logística", url: "/logistics", icon: Truck, allowedRoles: ["admin", "gerente"] },

@@ -5,7 +5,6 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Modal } from "@/components/Modal";
 import { FormField } from "@/components/FormField";
 import { toast } from "@/components/ui/use-toast";
-import { dispatchInventoryRefresh } from "@/lib/inventory-events";
 import { useAuth, useRoleAccess } from "@/auth/AuthProvider";
 import { orders as mockOrders, ProductionMaterial } from "@/data/mockData";
 import { Client, listClients } from "@/services/clients";
@@ -16,7 +15,6 @@ import {
   AdvanceProductionStatusInput,
   advanceProductionStatus,
   CompleteProductionError,
-  CompleteProductionStockDetail,
   EmployeeProduction,
   ProductionImage,
   ProductionCostReport,
@@ -30,7 +28,6 @@ import {
   deleteProduction,
   deleteProductionExpense,
   getProductionCostReport,
-  formatStockDetailMessage,
   listProductionImages,
   listProductionStatusOptions,
   listProductions,
@@ -64,7 +61,7 @@ const formatStageLabel = (value: string) => {
   return statusLabels[normalized] || normalized;
 };
 
-/** Approval/delivery stages deduct stock and close the production, so only admin/gerente may use them. */
+/** Approval/delivery stages close the production, so only admin/gerente may use them. */
 const isApprovalStageName = (name: string) => {
   const normalized = name
     .trim()
@@ -314,7 +311,6 @@ const ProductionPage = () => {
   const [statusEditorError, setStatusEditorError] = useState("");
   const [completionError, setCompletionError] = useState("");
   const [completionErrorStatus, setCompletionErrorStatus] = useState<number | null>(null);
-  const [completionDetails, setCompletionDetails] = useState<CompleteProductionStockDetail[]>([]);
   const [selectedForImages, setSelectedForImages] = useState<EmployeeProduction | null>(null);
   const [productionImages, setProductionImages] = useState<ProductionImage[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -712,8 +708,8 @@ const ProductionPage = () => {
     setFormError("");
 
     try {
-      // Stock is created with the purchased quantity, so approving the production deducts it back to zero.
-      const created = await createProduct({ name, stockQuantity: quantity, lowStockAlertQuantity: 0 });
+      // The product only enters the catalog; its cost is tracked as a material of this production.
+      const created = await createProduct({ name });
 
       setProductsCatalog((current) => [created, ...current]);
       setForm((current) => ({
@@ -793,7 +789,6 @@ const ProductionPage = () => {
   const clearCompletionFeedback = () => {
     setCompletionError("");
     setCompletionErrorStatus(null);
-    setCompletionDetails([]);
   };
 
   const openAdvanceModal = (order: EmployeeProduction) => {
@@ -1173,15 +1168,6 @@ const ProductionPage = () => {
         ),
       );
 
-      if (updated.productionStatus === "approved") {
-        dispatchInventoryRefresh({
-          productionId: orderId,
-          source: "production-advance-status",
-          status: "approved",
-          materials: updated.materials.length > 0 ? updated.materials : selectedToAdvance.materials,
-        });
-      }
-
       closeAdvanceModal(true);
       toast({
         title: "Etapa avancada",
@@ -1200,15 +1186,11 @@ const ProductionPage = () => {
         setAdvanceError(error.message);
         setCompletionError(error.message);
         setCompletionErrorStatus(error.status);
-        setCompletionDetails(error.details);
 
         toast({
           variant: "destructive",
           title: "Nao foi possivel avancar etapa",
-          description:
-            error.code === "insufficient_stock" && error.details.length > 0
-              ? formatStockDetailMessage(error.details[0])
-              : error.message,
+          description: error.message,
         });
 
         return;
@@ -1953,7 +1935,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
 
               <div className="mb-3 flex flex-wrap gap-2">
                 {([
-                  { value: false, label: "Produto do estoque" },
+                  { value: false, label: "Produto cadastrado" },
                   { value: true, label: "Cadastrar produto novo" },
                 ] as const).map((option) => (
                   <button
@@ -1983,7 +1965,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
                       />
                     </div>
                     <FormField
-                      label="Quantidade comprada"
+                      label="Quantidade usada"
                       type="number"
                       min={1}
                       step="1"
@@ -2005,7 +1987,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
                     />
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    O produto é cadastrado no estoque com a quantidade comprada e já entra nos materiais deste projeto.
+                    O produto é cadastrado e já entra nos materiais deste projeto. O valor (quantidade × preço) conta como gasto no relatório de custos.
                   </p>
                   <button
                     onClick={() => void addNewProductAsMaterial()}
@@ -2025,7 +2007,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
                       onChange={(e) => setNewMaterial((current) => ({ ...current, productId: e.target.value }))}
                       options={productsCatalog.map((product) => ({
                         value: product.id,
-                        label: `${product.name} (Saldo: ${product.stockQuantity})`,
+                        label: product.name,
                       }))}
                     />
                   </div>
@@ -2404,14 +2386,6 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
             {(advanceError || completionError) && (
               <div className="rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive space-y-2">
                 <p>{advanceError || completionError}</p>
-
-                {completionDetails.length > 0 && (
-                  <ul className="list-disc pl-4 space-y-1 text-xs">
-                    {completionDetails.map((detail, index) => (
-                      <li key={`${detail.productId}-${index}`}>{formatStockDetailMessage(detail)}</li>
-                    ))}
-                  </ul>
-                )}
 
                 {(completionErrorStatus === 500 || completionErrorStatus === 0) && (
                   <div className="pt-1">

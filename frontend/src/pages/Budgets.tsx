@@ -6,16 +6,13 @@ import { FormField } from "@/components/FormField";
 import { StatusBadge } from "@/components/StatusBadge";
 import { calculateBudget } from "@/data/mockData";
 import { ApiError } from "@/services/api";
-import { dispatchInventoryDataChanged } from "@/lib/inventory-events";
 import {
   ApproveBudgetError,
-  ApproveBudgetStockDetail,
   type BudgetApplicableCost as ApiBudgetApplicableCost,
   approveBudget,
   type BudgetExpenseDepartment as ApiBudgetExpenseDepartment,
   createBudget,
   type ExpenseDepartmentCatalogItem,
-  formatApproveBudgetDetailMessage,
   getBudgetById,
   listBudgets,
   listExpenseDepartments,
@@ -570,20 +567,6 @@ const createEmptyApplicableCost = (): BudgetApplicableCostRow => ({
 const formatExpenseDepartmentSuggestion = (department: ExpenseDepartmentCatalogItem) =>
   `${department.name} - ${department.sector} (${formatCurrency(department.defaultAmount)})`;
 
-const getStockBadge = (stockQuantity: number) => {
-  if (stockQuantity <= 0) {
-    return {
-      label: "Precisa comprar",
-      className: "bg-destructive/20 text-destructive",
-    };
-  }
-
-  return {
-    label: "Em estoque",
-    className: "bg-success/20 text-success",
-  };
-};
-
 const mapBudgetFromApi = (budget: ApiBudget, clientsCatalog: Client[] = []): BudgetRow => {
   const items = budget.materials.map(mapBudgetItemFromApi);
   const expenseDepartments = budget.expenseDepartments.map(mapBudgetExpenseDepartmentFromApi);
@@ -860,7 +843,6 @@ const BudgetsPage = () => {
   const [selectedToPreApprove, setSelectedToPreApprove] = useState<BudgetRow | null>(null);
   const [selectedToApprove, setSelectedToApprove] = useState<BudgetRow | null>(null);
   const [approvalError, setApprovalError] = useState("");
-  const [approvalDetails, setApprovalDetails] = useState<ApproveBudgetStockDetail[]>([]);
   const [clientsCatalog, setClientsCatalog] = useState<Client[]>([]);
   const [isLoadingClients, setIsLoadingClients] = useState(false);
   const [clientsError, setClientsError] = useState("");
@@ -1076,7 +1058,6 @@ const BudgetsPage = () => {
 
   const clearApprovalFeedback = () => {
     setApprovalError("");
-    setApprovalDetails([]);
   };
 
   const openPreApproveModal = (budget: BudgetRow) => {
@@ -2102,16 +2083,10 @@ const BudgetsPage = () => {
       setData((current) => current.map((item) => (item.id === approved.id ? approved : item)));
       closeApproveModal(true);
 
-      dispatchInventoryDataChanged({
-        source: "budget-approve",
-        referenceId: budgetId,
-      });
-
       await loadBudgetsFromApi();
     } catch (error) {
       if (error instanceof ApproveBudgetError) {
         setApprovalError(error.message);
-        setApprovalDetails(error.details);
         return;
       }
 
@@ -2558,15 +2533,6 @@ const BudgetsPage = () => {
     label: client.companyName ? `${client.name} • ${client.companyName}` : client.name,
   }));
 
-  const resolveItemStockStatus = (item: BudgetItemRow) => {
-    const matchingProduct = item.productId
-      ? productsCatalog.find((product) => product.id === item.productId)
-      : productsCatalog.find((product) => normalizeName(product.name) === normalizeName(item.productName));
-
-    const stockQuantity = matchingProduct?.stockQuantity ?? 0;
-    return getStockBadge(stockQuantity);
-  };
-
   const removeDetailItem = (idx: number) => {
     setSelectedBudget((current) => {
       if (!current) {
@@ -2843,11 +2809,6 @@ const BudgetsPage = () => {
                   <div key={i} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
                     <div className="flex items-center gap-2">
                       <span>{item.productName} × {item.quantity} {item.unit}</span>
-                      <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider ${resolveItemStockStatus(item).className}`}
-                      >
-                        {resolveItemStockStatus(item).label}
-                      </span>
                     </div>
                     <div className="flex items-center gap-3">
                       <span className="font-mono text-xs">R$ {item.subtotal.toFixed(2)}</span>
@@ -2893,7 +2854,7 @@ const BudgetsPage = () => {
                     onChange={e => setNewItem({ ...newItem, productId: e.target.value })}
                     options={productsCatalog.map((product) => ({
                       value: product.id,
-                      label: `${product.name} (Saldo: ${product.stockQuantity})`,
+                      label: product.name,
                     }))}
                   />
                 ) : (
@@ -3220,13 +3181,6 @@ const BudgetsPage = () => {
               <div className="rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive space-y-2">
                 <p>{approvalError}</p>
 
-                {approvalDetails.length > 0 && (
-                  <ul className="list-disc pl-4 space-y-1 text-xs">
-                    {approvalDetails.map((detail, index) => (
-                      <li key={`${detail.productId}-${index}`}>{formatApproveBudgetDetailMessage(detail)}</li>
-                    ))}
-                  </ul>
-                )}
               </div>
             )}
 
@@ -3441,11 +3395,6 @@ const BudgetsPage = () => {
                       <div key={i} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
                         <div className="flex items-center gap-2">
                           <span>{item.productName} × {item.quantity} {item.unit}</span>
-                          <span
-                            className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider ${resolveItemStockStatus(item).className}`}
-                          >
-                            {resolveItemStockStatus(item).label}
-                          </span>
                         </div>
 
                         <div className="flex items-center gap-3">
@@ -3497,7 +3446,7 @@ const BudgetsPage = () => {
                         onChange={e => setDetailNewItem({ ...detailNewItem, productId: e.target.value })}
                         options={productsCatalog.map((product) => ({
                           value: product.id,
-                          label: `${product.name} (Saldo: ${product.stockQuantity})`,
+                          label: product.name,
                         }))}
                       />
                     ) : (

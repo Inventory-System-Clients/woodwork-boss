@@ -8,15 +8,7 @@ import { useRoleAccess } from "@/auth/AuthProvider";
 import { ApiError } from "@/services/api";
 import { Budget, listBudgets } from "@/services/budgets";
 import { EmployeeProduction, listProductions } from "@/services/productions";
-import { Product, listProducts } from "@/services/products";
-import { FileText, Hammer, AlertTriangle, DollarSign } from "lucide-react";
-
-interface LowStockRow {
-  id: string;
-  name: string;
-  stockQuantity: number;
-  threshold: number;
-}
+import { FileText, Hammer, DollarSign } from "lucide-react";
 
 const isValidDate = (value: string) => {
   const parsed = new Date(value);
@@ -85,7 +77,6 @@ const Dashboard = () => {
 
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [productions, setProductions] = useState<EmployeeProduction[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [requestErrors, setRequestErrors] = useState<string[]>([]);
 
@@ -96,7 +87,6 @@ const Dashboard = () => {
     const results = await Promise.allSettled([
       canViewFinancials ? listBudgets() : Promise.resolve([] as Budget[]),
       listProductions(),
-      listProducts(),
     ]);
 
     const nextErrors: string[] = [];
@@ -118,14 +108,6 @@ const Dashboard = () => {
     } else {
       setProductions([]);
       nextErrors.push(buildRequestErrorMessage("Producoes", productionsResult.reason));
-    }
-
-    const productsResult = results[2];
-    if (productsResult.status === "fulfilled") {
-      setProducts(productsResult.value);
-    } else {
-      setProducts([]);
-      nextErrors.push(buildRequestErrorMessage("Produtos", productsResult.reason));
     }
 
     setRequestErrors(nextErrors);
@@ -161,19 +143,6 @@ const Dashboard = () => {
     [productions],
   );
 
-  const lowStockRows = useMemo<LowStockRow[]>(
-    () =>
-      products
-        .map((product) => ({
-          id: product.id,
-          name: product.name,
-          stockQuantity: product.stockQuantity,
-          threshold: Math.max(0, Number(product.lowStockAlertQuantity || 0)),
-        }))
-        .filter((row) => row.stockQuantity <= row.threshold),
-    [products],
-  );
-
   const orderColumns = [
     { key: "clientName", header: "Cliente" },
     { key: "description", header: "Descrição" },
@@ -184,12 +153,6 @@ const Dashboard = () => {
     },
     { key: "deliveryDate", header: "Entrega", mono: true },
     { key: "installationTeam", header: "Equipe" },
-  ];
-
-  const lowStockColumns = [
-    { key: "name", header: "Material" },
-    { key: "stockQuantity", header: "Atual", mono: true },
-    { key: "threshold", header: "Limite", mono: true },
   ];
 
   return (
@@ -225,13 +188,6 @@ const Dashboard = () => {
             subtitle={`${productions.length} no total`}
             highlight={activeProductions.length > 0}
           />
-          <StatCard
-            title="Alertas de Estoque"
-            value={lowStockRows.length}
-            icon={<AlertTriangle className="h-4 w-4" />}
-            subtitle="Produtos com estoque baixo"
-            highlight={lowStockRows.length > 0}
-          />
           {canViewFinancials && (
             <StatCard
               title="Receita Mensal"
@@ -255,18 +211,6 @@ const Dashboard = () => {
           />
         </div>
 
-        {lowStockRows.length > 0 && (
-          <div>
-            <h2 className="text-xs uppercase tracking-widest text-muted-foreground font-bold mb-4">Alertas de Estoque Baixo</h2>
-            <DataTable
-              columns={lowStockColumns}
-              data={lowStockRows}
-              rowHighlight={(item: LowStockRow) =>
-                item.stockQuantity < item.threshold ? "border-l-2 border-l-primary" : ""
-              }
-            />
-          </div>
-        )}
       </div>
     </DashboardLayout>
   );

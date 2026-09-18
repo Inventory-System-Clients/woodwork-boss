@@ -3,21 +3,16 @@ import { parseCollection, request } from "@/services/api";
 export interface Product {
   id: string;
   name: string;
-  stockQuantity: number;
-  lowStockAlertQuantity: number;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface CreateProductInput {
   name: string;
-  stockQuantity: number;
-  lowStockAlertQuantity: number;
 }
 
 export interface UpdateProductInput {
   name: string;
-  lowStockAlertQuantity: number;
 }
 
 const toRecord = (value: unknown): Record<string, unknown> | null => {
@@ -30,11 +25,6 @@ const toRecord = (value: unknown): Record<string, unknown> | null => {
 
 const toStringSafe = (value: unknown, fallback = "") =>
   typeof value === "string" ? value : fallback;
-
-const toNumberSafe = (value: unknown, fallback = 0) => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-};
 
 const normalizeProduct = (value: unknown): Product | null => {
   const item = toRecord(value);
@@ -53,16 +43,6 @@ const normalizeProduct = (value: unknown): Product | null => {
   return {
     id,
     name,
-    stockQuantity: toNumberSafe(item.stockQuantity ?? item.stock_quantity ?? item.stock, 0),
-    lowStockAlertQuantity: toNumberSafe(
-      item.lowStockAlertQuantity ??
-        item.low_stock_alert_quantity ??
-        item.minStock ??
-        item.min_stock ??
-        item.minimumStock ??
-        item.minimum_stock,
-      0,
-    ),
     createdAt: toStringSafe(item.createdAt ?? item.created_at, ""),
     updatedAt: toStringSafe(item.updatedAt ?? item.updated_at, ""),
   };
@@ -92,22 +72,9 @@ const ensureProduct = (payload: unknown, fallbackMessage: string) => {
   return normalized;
 };
 
-const toCreatePayload = (input: CreateProductInput) => ({
-  name: input.name.trim(),
-  stockQuantity: toNumberSafe(input.stockQuantity, 0),
-  lowStockAlertQuantity: Math.max(0, Math.trunc(toNumberSafe(input.lowStockAlertQuantity, 0))),
-  low_stock_alert_quantity: Math.max(0, Math.trunc(toNumberSafe(input.lowStockAlertQuantity, 0))),
-  minStock: Math.max(0, Math.trunc(toNumberSafe(input.lowStockAlertQuantity, 0))),
-  min_stock: Math.max(0, Math.trunc(toNumberSafe(input.lowStockAlertQuantity, 0))),
-});
+const toCreatePayload = (input: CreateProductInput) => ({ name: input.name.trim() });
 
-const toUpdatePayload = (input: UpdateProductInput) => ({
-  name: input.name.trim(),
-  lowStockAlertQuantity: Math.max(0, Math.trunc(toNumberSafe(input.lowStockAlertQuantity, 0))),
-  low_stock_alert_quantity: Math.max(0, Math.trunc(toNumberSafe(input.lowStockAlertQuantity, 0))),
-  minStock: Math.max(0, Math.trunc(toNumberSafe(input.lowStockAlertQuantity, 0))),
-  min_stock: Math.max(0, Math.trunc(toNumberSafe(input.lowStockAlertQuantity, 0))),
-});
+const toUpdatePayload = (input: UpdateProductInput) => ({ name: input.name.trim() });
 
 const buildProductsPath = (search?: string) => {
   const query = search?.trim();

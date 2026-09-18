@@ -134,17 +134,8 @@ interface ListProductionsParams {
   active?: boolean;
 }
 
-export interface CompleteProductionStockDetail {
-  productId: string;
-  productName: string;
-  requestedQuantity: number;
-  availableStock: number;
-}
-
 export type CompleteProductionErrorCode =
-  | "insufficient_stock"
   | "invalid_material_data"
-  | "stock_configuration_missing"
   | "forbidden"
   | "not_found"
   | "server_error"
@@ -171,7 +162,6 @@ interface CompleteProductionErrorInput {
   status: number;
   code: CompleteProductionErrorCode;
   message: string;
-  details?: CompleteProductionStockDetail[];
 }
 
 interface ProductionShareErrorInput {
@@ -195,13 +185,11 @@ export interface ProductionShareLink {
 export class CompleteProductionError extends Error {
   status: number;
   code: CompleteProductionErrorCode;
-  details: CompleteProductionStockDetail[];
 
-  constructor({ status, code, message, details = [] }: CompleteProductionErrorInput) {
+  constructor({ status, code, message }: CompleteProductionErrorInput) {
     super(message);
     this.status = status;
     this.code = code;
-    this.details = details;
   }
 }
 
@@ -297,105 +285,25 @@ const normalizeDeliveryDate = (value: unknown) => {
   return raw.includes("T") ? raw.split("T")[0] : raw;
 };
 
-const mapStockDetail = (value: unknown): CompleteProductionStockDetail | null => {
-  const detail = toRecord(value);
-
-  if (!detail) {
-    return null;
-  }
-
-  const productId = toStringSafe(detail.productId ?? detail.product_id, "");
-  const productName = toStringSafe(detail.productName ?? detail.product_name, "");
-  const requestedQuantity = toNumber(detail.requestedQuantity ?? detail.requested_quantity);
-  const availableStock = toNumber(detail.availableStock ?? detail.available_stock);
-
-  if (!productId && !productName && requestedQuantity === 0 && availableStock === 0) {
-    return null;
-  }
-
-  return {
-    productId,
-    productName,
-    requestedQuantity,
-    availableStock,
-  };
-};
-
-const extractStockDetails = (payload: unknown): CompleteProductionStockDetail[] => {
-  const data = toRecord(payload);
-
-  if (!data) {
-    return [];
-  }
-
-  const rawDetails = data.details ?? data.detail;
-
-  if (Array.isArray(rawDetails)) {
-    return rawDetails
-      .map(mapStockDetail)
-      .filter((detail): detail is CompleteProductionStockDetail => Boolean(detail));
-  }
-
-  const fromDetails = mapStockDetail(rawDetails);
-
-  if (fromDetails) {
-    return [fromDetails];
-  }
-
-  const fromPayload = mapStockDetail(data);
-
-  if (fromPayload) {
-    return [fromPayload];
-  }
-
-  return [];
-};
-
-const formatQuantity = (value: number) =>
-  Number.isInteger(value)
-    ? String(value)
-    : value.toLocaleString("pt-BR", {
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 3,
-      });
-
-export const formatStockDetailMessage = (detail: CompleteProductionStockDetail) => {
-  const productName = detail.productName || "Produto sem nome";
-  const productId = detail.productId || "sem-id";
-
-  return `Produto ${productName} (id: ${productId}): solicitado ${formatQuantity(detail.requestedQuantity)}, disponivel ${formatQuantity(detail.availableStock)}`;
-};
-
 const mapCompleteProductionError = (error: ApiError) => {
-  const details = extractStockDetails(error.payload);
-
   switch (error.status) {
-    case 409:
-      return new CompleteProductionError({
-        status: 409,
-        code: "insufficient_stock",
-        message: "Estoque insuficiente para concluir a producao",
-        details,
-      });
     case 400:
       return new CompleteProductionError({
         status: 400,
         code: "invalid_material_data",
         message: "Dados inconsistentes na producao/orcamento. Revise os materiais vinculados ao produto.",
-        details,
       });
     case 500:
       return new CompleteProductionError({
         status: 500,
-        code: "stock_configuration_missing",
-        message: "Configuracao de estoque do servidor nao aplicada. Contate o suporte.",
+        code: "server_error",
+        message: "Erro interno no servidor ao concluir a producao.",
       });
     default:
       return new CompleteProductionError({
         status: error.status,
         code: "unknown",
         message: error.message || "Falha ao aprovar/concluir producao.",
-        details,
       });
   }
 };
@@ -494,8 +402,6 @@ const fetchPublicProductionByToken = async (token: string) => {
 };
 
 const mapAdvanceProductionError = (error: ApiError) => {
-  const details = extractStockDetails(error.payload);
-
   switch (error.status) {
     case 401:
       return new CompleteProductionError({
@@ -513,20 +419,13 @@ const mapAdvanceProductionError = (error: ApiError) => {
       return new CompleteProductionError({
         status: 403,
         code: "forbidden",
-        message: "Acesso negado. Apenas admin e gerente podem alterar o status da producao.",
+        message: error.message || "Acesso negado para alterar o status desta producao.",
       });
     case 404:
       return new CompleteProductionError({
         status: 404,
         code: "not_found",
         message: "Producao nao encontrada.",
-      });
-    case 409:
-      return new CompleteProductionError({
-        status: 409,
-        code: "insufficient_stock",
-        message: "Estoque insuficiente para avancar para a etapa de aprovacao.",
-        details,
       });
     case 500:
       return new CompleteProductionError({
@@ -539,7 +438,6 @@ const mapAdvanceProductionError = (error: ApiError) => {
         status: error.status,
         code: "unknown",
         message: error.message || "Falha ao avancar etapa da producao.",
-        details,
       });
   }
 };

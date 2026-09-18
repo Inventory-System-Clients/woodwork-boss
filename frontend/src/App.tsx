@@ -14,7 +14,6 @@ import ClientsPage from "./pages/Clients.tsx";
 import EmployeesPage from "./pages/Employees.tsx";
 import TeamsPage from "./pages/Teams.tsx";
 import ProductsPage from "./pages/Products.tsx";
-import StockPage from "./pages/Stock.tsx";
 import BudgetsPage from "./pages/Budgets.tsx";
 import ProductionPage from "./pages/Production.tsx";
 import LogisticsPage from "./pages/Logistics.tsx";
@@ -50,7 +49,6 @@ const App = () => (
                   <Route path="/employees" element={<EmployeesPage />} />
                   <Route path="/teams" element={<TeamsPage />} />
                   <Route path="/products" element={<ProductsPage />} />
-                  <Route path="/stock" element={<StockPage />} />
                   <Route path="/budgets" element={<BudgetsPage />} />
                 </Route>
               </Route>
