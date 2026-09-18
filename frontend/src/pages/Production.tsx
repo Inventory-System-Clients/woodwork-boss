@@ -1679,7 +1679,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
           </div>
         )}
 
-        <div className="flex gap-3 flex-wrap items-center">
+        <div className={`flex gap-3 flex-wrap items-center ${isEmployee ? "hidden" : ""}`}>
           <div className="inline-flex rounded border border-border overflow-hidden text-xs font-bold">
             {([
               { value: false, label: "EM ANDAMENTO" },

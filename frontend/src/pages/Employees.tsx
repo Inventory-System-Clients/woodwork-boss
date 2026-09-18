@@ -14,7 +14,12 @@ import {
   updateEmployee,
 } from "@/services/employees";
 import { EmployeeProduction, listProductionsByEmployee } from "@/services/productions";
-import { ClipboardList, Pencil, Plus, Trash2 } from "lucide-react";
+import {
+  EmployeeWorkHoursReport,
+  formatMinutes,
+  getEmployeeWorkHours,
+} from "@/services/workHours";
+import { ClipboardList, Clock, Pencil, Plus, Trash2 } from "lucide-react";
 
 interface EmployeeFormState {
   name: string;
@@ -57,7 +62,27 @@ const formatDeliveryDate = (value: string) => {
   return value;
 };
 
+const toDateInput = (date: Date) => {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 10);
+};
+
+const formatDayLabel = (date: string) => {
+  const parsed = new Date(`${date}T12:00:00`);
+
+  return Number.isNaN(parsed.getTime())
+    ? date
+    : parsed.toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "2-digit" });
+};
+
 const EmployeesPage = () => {
+  const [hoursEmployee, setHoursEmployee] = useState<Employee | null>(null);
+  const [hoursFrom, setHoursFrom] = useState(() => toDateInput(new Date(Date.now() - 6 * 86400000)));
+  const [hoursTo, setHoursTo] = useState(() => toDateInput(new Date()));
+  const [hoursReport, setHoursReport] = useState<EmployeeWorkHoursReport | null>(null);
+  const [isLoadingHours, setIsLoadingHours] = useState(false);
+  const [hoursError, setHoursError] = useState("");
+
   const [data, setData] = useState<Employee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -149,6 +174,44 @@ const EmployeesPage = () => {
     setProductionsModalOpen(true);
     void loadEmployeeProductions(employee);
   };
+
+  const loadHours = async (employee: Employee, from: string, to: string) => {
+    setIsLoadingHours(true);
+    setHoursError("");
+
+    try {
+      setHoursReport(await getEmployeeWorkHours(employee.id, { from, to }));
+    } catch (error) {
+      setHoursReport(null);
+      setHoursError(error instanceof Error ? error.message : "Falha ao carregar as horas.");
+    } finally {
+      setIsLoadingHours(false);
+    }
+  };
+
+  const openHours = (employee: Employee) => {
+    const from = toDateInput(new Date(Date.now() - 6 * 86400000));
+    const to = toDateInput(new Date());
+
+    setHoursEmployee(employee);
+    setHoursFrom(from);
+    setHoursTo(to);
+    setHoursReport(null);
+    void loadHours(employee, from, to);
+  };
+
+  const hoursByDay = useMemo(() => {
+    const days = new Map<string, { total: number; entries: EmployeeWorkHoursReport["entries"] }>();
+
+    (hoursReport?.entries ?? []).forEach((entry) => {
+      const day = days.get(entry.workDate) ?? { total: 0, entries: [] };
+      day.total += entry.minutes;
+      day.entries.push(entry);
+      days.set(entry.workDate, day);
+    });
+
+    return Array.from(days.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [hoursReport]);
 
   const closeEmployeeProductionsModal = () => {
     setProductionsModalOpen(false);
@@ -301,6 +364,16 @@ const EmployeesPage = () => {
       header: "",
       render: (item: Employee) => (
         <div className="flex gap-2">
+          <button
+            onClick={(event) => {
+              event.stopPropagation();
+              openHours(item);
+            }}
+            className="p-1 hover:bg-primary/20 rounded text-muted-foreground hover:text-primary"
+            title="Horas trabalhadas"
+          >
+            <Clock className="h-3.5 w-3.5" />
+          </button>
           <button
             onClick={(event) => {
               event.stopPropagation();
@@ -525,6 +598,81 @@ const EmployeesPage = () => {
           <div className="flex justify-end">
             <button
               onClick={closeEmployeeProductionsModal}
+              className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground"
+            >
+              Fechar
+            </button>
+          </div>
+        </div>
+      </Modal>
+      <Modal
+        open={Boolean(hoursEmployee)}
+        onClose={() => setHoursEmployee(null)}
+        title={hoursEmployee ? `Horas trabalhadas • ${hoursEmployee.name}` : "Horas trabalhadas"}
+        width="max-w-3xl"
+      >
+        <div className="space-y-4 max-h-[75dvh] overflow-y-auto pr-1">
+          <div className="flex flex-wrap items-end gap-3">
+            <FormField
+              label="De"
+              type="date"
+              value={hoursFrom}
+              onChange={(event) => setHoursFrom(event.target.value)}
+            />
+            <FormField
+              label="Até"
+              type="date"
+              value={hoursTo}
+              onChange={(event) => setHoursTo(event.target.value)}
+            />
+            <button
+              onClick={() => hoursEmployee && void loadHours(hoursEmployee, hoursFrom, hoursTo)}
+              disabled={isLoadingHours || !hoursFrom || !hoursTo}
+              className="px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {isLoadingHours ? "Carregando..." : "Filtrar"}
+            </button>
+          </div>
+
+          {hoursError && (
+            <div className="border border-destructive/40 bg-destructive/10 rounded px-3 py-2 text-sm text-destructive">
+              {hoursError}
+            </div>
+          )}
+
+          {hoursReport && (
+            <>
+              <div className="border border-border rounded bg-secondary/20 px-4 py-3 flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Total no período</span>
+                <span className="font-mono text-lg font-bold text-primary">{formatMinutes(hoursReport.totalMinutes)}</span>
+              </div>
+
+              {hoursByDay.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Nenhuma hora registrada neste período.</p>
+              ) : (
+                hoursByDay.map(([day, info]) => (
+                  <div key={day} className="border border-border rounded">
+                    <div className="flex items-center justify-between px-3 py-2 bg-secondary/30 text-sm font-bold">
+                      <span className="capitalize">{formatDayLabel(day)}</span>
+                      <span className="font-mono">{formatMinutes(info.total)}</span>
+                    </div>
+                    <div className="divide-y divide-border/50">
+                      {info.entries.map((entry) => (
+                        <div key={entry.id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                          <span>{entry.productionLabel || "Produção excluída"}</span>
+                          <span className="font-mono text-xs">{formatMinutes(entry.minutes)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))
+              )}
+            </>
+          )}
+
+          <div className="flex justify-end">
+            <button
+              onClick={() => setHoursEmployee(null)}
               className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary transition-colors text-muted-foreground"
             >
               Fechar

@@ -19,6 +19,7 @@ import BudgetsPage from "./pages/Budgets.tsx";
 import ProductionPage from "./pages/Production.tsx";
 import LogisticsPage from "./pages/Logistics.tsx";
 import ProductionTrackingPublicPage from "./pages/ProductionTrackingPublic.tsx";
+import WorkHoursPage from "./pages/WorkHours.tsx";
 
 const queryClient = new QueryClient();
 
@@ -37,10 +38,14 @@ const App = () => (
               <Route element={<RequireAuth />}>
                 <Route path="/" element={<Index />} />
                 <Route path="/production" element={<ProductionPage />} />
-                <Route path="/logistics" element={<LogisticsPage />} />
                 <Route path="/forbidden" element={<ForbiddenPage />} />
 
+                <Route element={<RequireRoles allowedRoles={["funcionario"]} />}>
+                  <Route path="/hours" element={<WorkHoursPage />} />
+                </Route>
+
                 <Route element={<RequireRoles allowedRoles={["admin", "gerente"]} />}>
+                  <Route path="/logistics" element={<LogisticsPage />} />
                   <Route path="/clients" element={<ClientsPage />} />
                   <Route path="/employees" element={<EmployeesPage />} />
                   <Route path="/teams" element={<TeamsPage />} />

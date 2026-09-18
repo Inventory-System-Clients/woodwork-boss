@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Navigate } from "react-router-dom";
 import { DashboardLayout } from "@/layouts/DashboardLayout";
 import { StatCard } from "@/components/StatCard";
 import { DataTable } from "@/components/DataTable";
@@ -66,6 +67,17 @@ const buildRequestErrorMessage = (label: string, error: unknown) => {
   }
 
   return `${label}: falha ao carregar dados.`;
+};
+
+const Index = () => {
+  const { isEmployee } = useRoleAccess();
+
+  // Employees have a simplified area: their home is the daily hours page.
+  if (isEmployee) {
+    return <Navigate to="/hours" replace />;
+  }
+
+  return <Dashboard />;
 };
 
 const Dashboard = () => {
@@ -260,4 +272,4 @@ const Dashboard = () => {
   );
 };
 
-export default Dashboard;
+export default Index;
