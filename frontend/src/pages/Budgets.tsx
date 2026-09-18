@@ -10,6 +10,7 @@ import {
   ApproveBudgetError,
   type BudgetApplicableCost as ApiBudgetApplicableCost,
   approveBudget,
+  deleteBudget,
   type BudgetExpenseDepartment as ApiBudgetExpenseDepartment,
   createBudget,
   type ExpenseDepartmentCatalogItem,
@@ -816,6 +817,7 @@ const BudgetsPage = () => {
   const [formError, setFormError] = useState("");
   const [statusFieldError, setStatusFieldError] = useState("");
   const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [deletingBudgetId, setDeletingBudgetId] = useState<string | null>(null);
   const [preApprovingId, setPreApprovingId] = useState<string | null>(null);
   const [generatingPdfId, setGeneratingPdfId] = useState<string | null>(null);
   const [contractModalOpen, setContractModalOpen] = useState(false);
@@ -2067,6 +2069,33 @@ const BudgetsPage = () => {
     }
   };
 
+  const removeBudget = async (budget: BudgetRow) => {
+    if (deletingBudgetId || approvingId) {
+      return;
+    }
+
+    const warning =
+      budget.status === "approved"
+        ? "Este orçamento está APROVADO e deixará de contar na receita e no financeiro."
+        : "Esta ação não pode ser desfeita.";
+
+    if (!window.confirm(`Excluir o orçamento de "${budget.clientName}"?\n\n${warning}`)) {
+      return;
+    }
+
+    setDeletingBudgetId(budget.id);
+    setRequestError("");
+
+    try {
+      await deleteBudget(budget.id);
+      setData((current) => current.filter((item) => item.id !== budget.id));
+    } catch (error) {
+      setRequestError(normalizeBudgetError(error, "Não foi possível excluir o orçamento."));
+    } finally {
+      setDeletingBudgetId(null);
+    }
+  };
+
   const confirmApproveBudget = async () => {
     if (!selectedToApprove || approvingId) {
       return;
@@ -2647,6 +2676,19 @@ const BudgetsPage = () => {
               {approvingId === b.id ? "APROVANDO..." : "APROVAR OFICIALMENTE"}
             </button>
           )}
+
+          <button
+            title="Excluir orçamento"
+            aria-label="Excluir orçamento"
+            onClick={(e) => {
+              e.stopPropagation();
+              void removeBudget(b);
+            }}
+            disabled={Boolean(deletingBudgetId) || Boolean(approvingId)}
+            className="inline-flex items-center justify-center h-7 w-7 rounded border border-destructive/40 text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Trash2 className={`h-3.5 w-3.5 ${deletingBudgetId === b.id ? "animate-pulse" : ""}`} />
+          </button>
         </div>
       ),
     },

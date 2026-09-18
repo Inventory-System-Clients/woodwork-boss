@@ -619,6 +619,23 @@ export const updateBudget = async (id: string, input: UpdateBudgetInput) => {
   return ensureBudget(payload, "Não foi possível atualizar o orçamento.");
 };
 
+export const deleteBudget = async (id: string) => {
+  try {
+    await request<unknown>(`/budgets/${encodeURIComponent(id)}`, { method: "DELETE" });
+  } catch (error) {
+    if (error instanceof ApiError) {
+      switch (error.status) {
+        case 404:
+          throw new Error("Orçamento não encontrado. Ele pode já ter sido excluído.");
+        case 409:
+          throw new Error("Este orçamento já virou uma produção e não pode ser excluído. Exclua a produção primeiro.");
+      }
+    }
+
+    throw error;
+  }
+};
+
 export const approveBudget = async (id: string) => {
   try {
     const payload = await request<unknown>(`/budgets/${id}/approve`, {
