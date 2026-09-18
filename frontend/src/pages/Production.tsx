@@ -64,6 +64,17 @@ const formatStageLabel = (value: string) => {
   return statusLabels[normalized] || normalized;
 };
 
+/** Approval/delivery stages deduct stock and close the production, so only admin/gerente may use them. */
+const isApprovalStageName = (name: string) => {
+  const normalized = name
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "");
+
+  return ["approved", "aprovad", "delivered", "entreg"].some((keyword) => normalized.includes(keyword));
+};
+
 const copyText = async (value: string) => {
   if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(value);
@@ -251,6 +262,8 @@ const createInitialNewExpense = () => ({ description: "", category: "", amount: 
 const ProductionPage = () => {
   const { user } = useAuth();
   const { canCreateProduction, canCompleteProduction, isEmployee } = useRoleAccess();
+  // Employees can advance stages and upload images on their own productions (no costs, no approval).
+  const canWorkOnProduction = canCompleteProduction || isEmployee;
 
   const [data, setData] = useState<EmployeeProduction[]>([]);
   const [modal, setModal] = useState(false);
@@ -447,7 +460,7 @@ const ProductionPage = () => {
   };
 
   const loadStatusOptions = async () => {
-    if (!canCompleteProduction) {
+    if (!canWorkOnProduction) {
       setStatusOptions([]);
       setStatusOptionsError("");
       return;
@@ -551,7 +564,7 @@ const ProductionPage = () => {
   useEffect(() => {
     void loadTeams();
     void loadStatusOptions();
-  }, [canCreateProduction, canCompleteProduction]);
+  }, [canCreateProduction, canWorkOnProduction]);
 
   useEffect(() => {
     if (!modal) {
@@ -788,7 +801,10 @@ const ProductionPage = () => {
       return;
     }
 
-    const initialTeamId = order.statuses[0]?.teamId || teams[0]?.id || "";
+    // Employees always act as the production's own team; managers pick the team.
+    const initialTeamId = isEmployee
+      ? order.installationTeamId || ""
+      : order.statuses[0]?.teamId || teams[0]?.id || "";
 
     clearCompletionFeedback();
     setAdvanceError("");
@@ -1071,12 +1087,16 @@ const ProductionPage = () => {
   };
 
   const confirmAdvanceStage = async () => {
-    if (!canCompleteProduction || !selectedToAdvance) {
+    if (!canWorkOnProduction || !selectedToAdvance) {
       return;
     }
 
     if (!advanceTeamId) {
-      setAdvanceError("Selecione uma equipe responsavel para a etapa.");
+      setAdvanceError(
+        isEmployee
+          ? "Esta producao nao tem equipe definida. Avise o responsavel."
+          : "Selecione uma equipe responsavel para a etapa.",
+      );
       return;
     }
 
@@ -1549,7 +1569,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
     },
     { key: "deliveryDate", header: "Entrega", mono: true },
     { key: "installationTeam", header: "Equipe" },
-    ...(canCompleteProduction
+    ...(canWorkOnProduction
       ? [
           {
             key: "actions",
@@ -1573,31 +1593,35 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
                     {isAdvancingCurrent ? "AVANCANDO..." : "AVANÇAR ETAPA"}
                   </button>
 
-                  <button
-                    title="Editar etapas"
-                    aria-label="Editar etapas"
-                    disabled={isBusy}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openEditStatusesModal(o);
-                    }}
-                    className={iconButtonClass}
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
+                  {canCompleteProduction && (
+                    <button
+                      title="Editar etapas"
+                      aria-label="Editar etapas"
+                      disabled={isBusy}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openEditStatusesModal(o);
+                      }}
+                      className={iconButtonClass}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                  )}
 
-                  <button
-                    title="Custos e relatório"
-                    aria-label="Custos e relatório"
-                    disabled={isBusy}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openReportModal(o);
-                    }}
-                    className={iconButtonClass}
-                  >
-                    <Receipt className="h-3.5 w-3.5" />
-                  </button>
+                  {canCompleteProduction && (
+                    <button
+                      title="Custos e relatório"
+                      aria-label="Custos e relatório"
+                      disabled={isBusy}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openReportModal(o);
+                      }}
+                      className={iconButtonClass}
+                    >
+                      <Receipt className="h-3.5 w-3.5" />
+                    </button>
+                  )}
 
                   <button
                     title="Imagens"
@@ -1612,20 +1636,22 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
                     <ImagePlus className="h-3.5 w-3.5" />
                   </button>
 
-                  <button
-                    title="Copiar link de acompanhamento"
-                    aria-label="Copiar link de acompanhamento"
-                    disabled={isBusy}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void shareProduction(o);
-                    }}
-                    className={iconButtonClass}
-                  >
-                    <Share2 className={`h-3.5 w-3.5 ${sharingId === o.id ? "animate-pulse text-primary" : ""}`} />
-                  </button>
+                  {canCompleteProduction && (
+                    <button
+                      title="Copiar link de acompanhamento"
+                      aria-label="Copiar link de acompanhamento"
+                      disabled={isBusy}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void shareProduction(o);
+                      }}
+                      className={iconButtonClass}
+                    >
+                      <Share2 className={`h-3.5 w-3.5 ${sharingId === o.id ? "animate-pulse text-primary" : ""}`} />
+                    </button>
+                  )}
 
-                  {isProductionInProgress(o) && (
+                  {canCompleteProduction && isProductionInProgress(o) && (
                     <button
                       title="Excluir produção"
                       aria-label="Excluir produção"
@@ -2138,7 +2164,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
         </Modal>
       )}
 
-      {canCompleteProduction && selectedForImages && (
+      {canWorkOnProduction && selectedForImages && (
         <Modal
           open={Boolean(selectedForImages)}
           onClose={closeImagesModal}
@@ -2264,7 +2290,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
         </Modal>
       )}
 
-      {canCompleteProduction && selectedToAdvance && (
+      {canWorkOnProduction && selectedToAdvance && (
         <Modal
           open={Boolean(selectedToAdvance)}
           onClose={() => closeAdvanceModal()}
@@ -2273,7 +2299,9 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
         >
           <div className="space-y-4">
             <p className="text-sm text-foreground/90">
-              Escolha uma etapa existente ou crie uma nova etapa e selecione a equipe responsavel.
+              {isEmployee
+                ? "Escolha a etapa em que a producao esta agora."
+                : "Escolha uma etapa existente ou crie uma nova etapa e selecione a equipe responsavel."}
             </p>
 
             <div className="rounded border border-border bg-secondary/20 px-3 py-2 text-sm space-y-1">
@@ -2302,7 +2330,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
               </div>
             )}
 
-            <div className="mb-1 flex flex-wrap gap-2">
+            <div className={`mb-1 flex flex-wrap gap-2 ${isEmployee ? "hidden" : ""}`}>
               <button
                 type="button"
                 onClick={() => setAdvanceMode("existing")}
@@ -2336,9 +2364,12 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
                   setAdvanceStageId(e.target.value);
                   setAdvanceError("");
                 }}
-                options={statusOptions.map((option) => ({
+                options={(isEmployee
+                  ? statusOptions.filter((option) => !isApprovalStageName(option.name))
+                  : statusOptions
+                ).map((option) => ({
                   value: option.id,
-                  label: `${option.name} (${option.usageCount})`,
+                  label: isEmployee ? option.name : `${option.name} (${option.usageCount})`,
                 }))}
               />
             ) : (
@@ -2353,18 +2384,20 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
               />
             )}
 
-            <FormField
-              label="Equipe responsavel"
-              as="select"
-              value={advanceTeamId}
-              onChange={(e) => {
-                setAdvanceTeamId(e.target.value);
-                setAdvanceError("");
-              }}
-              options={teams.map((team) => ({ value: team.id, label: team.name }))}
-            />
+            {!isEmployee && (
+              <FormField
+                label="Equipe responsavel"
+                as="select"
+                value={advanceTeamId}
+                onChange={(e) => {
+                  setAdvanceTeamId(e.target.value);
+                  setAdvanceError("");
+                }}
+                options={teams.map((team) => ({ value: team.id, label: team.name }))}
+              />
+            )}
 
-            {!isLoadingTeams && teams.length === 0 && (
+            {!isEmployee && !isLoadingTeams && teams.length === 0 && (
               <p className="text-xs text-destructive">Nenhuma equipe cadastrada. Cadastre uma equipe antes de avancar etapa.</p>
             )}
 
@@ -2408,7 +2441,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
                 onClick={() => {
                   void confirmAdvanceStage();
                 }}
-                disabled={isAdvancingSelected || isLoadingTeams || teams.length === 0}
+                disabled={isAdvancingSelected || (!isEmployee && (isLoadingTeams || teams.length === 0))}
                 className="px-4 py-2 text-sm rounded bg-success text-success-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {isAdvancingSelected
