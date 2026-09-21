@@ -136,6 +136,22 @@ const ProjectsPage = () => {
                 mono: true,
                 render: (project) => formatCurrency(project.totalCost ?? 0),
               },
+              {
+                key: "grossValue",
+                header: "Valor Final (Bruto)",
+                mono: true,
+                render: (project) => formatCurrency(project.grossValue ?? 0),
+              },
+              {
+                key: "netProfit",
+                header: "Lucro Líquido",
+                mono: true,
+                render: (project) => (
+                  <span className={(project.netProfit ?? 0) < 0 ? "text-destructive" : "text-success"}>
+                    {formatCurrency(project.netProfit ?? 0)}
+                  </span>
+                ),
+              },
             ]}
           />
         )}

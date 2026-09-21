@@ -11,6 +11,10 @@ export interface ProjectListItem {
   status: ProjectStatus;
   /** Only present for admins. */
   totalCost: number | null;
+  /** Gross value charged to the client. Admin only. */
+  grossValue: number | null;
+  /** Gross value - total cost. Admin only. */
+  netProfit: number | null;
 }
 
 export interface ProjectTotals {
@@ -68,6 +72,8 @@ export interface ProjectDashboard {
   totals: ProjectTotals;
   hoursMonthMinutes: number;
   monthLabel: string;
+  /** Sum of the net profit of finished projects. */
+  totalProfit: number;
   topProjects: { id: string; name: string; clientName: string; totalCost: number; totalMinutes: number }[];
   monthly: ProjectMonthlyPoint[];
 }
@@ -149,6 +155,8 @@ const mapListItem = (item: ProjectListItem): ProjectListItem => ({
   deadline: item.deadline ?? null,
   status: normalizeStatus(item.status),
   totalCost: item.totalCost === undefined || item.totalCost === null ? null : num(item.totalCost),
+  grossValue: item.grossValue === undefined || item.grossValue === null ? null : num(item.grossValue),
+  netProfit: item.netProfit === undefined || item.netProfit === null ? null : num(item.netProfit),
 });
 
 const mapCost = (item: ProjectCost): ProjectCost => ({
@@ -254,6 +262,7 @@ export const getProjectDashboard = async (): Promise<ProjectDashboard> => {
     totals: mapTotals(data.totals),
     hoursMonthMinutes: num(data.hoursMonthMinutes),
     monthLabel: data.monthLabel ?? "",
+    totalProfit: num(data.totalProfit),
     topProjects: (data.topProjects ?? []).map((row) => ({
       ...row,
       totalCost: num(row.totalCost),

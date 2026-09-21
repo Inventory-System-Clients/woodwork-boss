@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { useNavigate } from "react-router-dom";
-import { AlertTriangle, Banknote, Clock, FolderOpen, Hourglass, Wallet } from "lucide-react";
+import { AlertTriangle, Banknote, TrendingUp, Clock, FolderOpen, Hourglass, Wallet } from "lucide-react";
 import { DashboardLayout } from "@/layouts/DashboardLayout";
 import { StatCard } from "@/components/StatCard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -115,6 +115,13 @@ const DashboardPage = () => {
                 title="Custo total"
                 value={formatCurrency(data.totals.totalCost)}
                 icon={<Banknote className="h-4 w-4" />}
+                highlight
+              />
+              <StatCard
+                title="Lucro"
+                value={formatCurrency(data.totalProfit)}
+                subtitle="projetos finalizados (valor final − custos)"
+                icon={<TrendingUp className="h-4 w-4" />}
                 highlight
               />
               <StatCard

@@ -24,6 +24,9 @@ interface Row {
 const inputClass =
   "block w-full rounded border border-border bg-background px-3 py-2 text-base text-foreground focus:outline-none focus:ring-1 focus:ring-ring";
 
+// Limit for the whole day, summing every project and activity.
+const MAX_DAY_MINUTES = 8 * 60;
+
 let keyCounter = 0;
 const nextKey = () => `row-${(keyCounter += 1)}`;
 
@@ -176,8 +179,12 @@ const WorkHoursPage = () => {
       return;
     }
 
-    if (totalMinutes > 24 * 60) {
-      toast({ variant: "destructive", title: "O total do dia não pode passar de 24h." });
+    if (totalMinutes > MAX_DAY_MINUTES) {
+      toast({
+        variant: "destructive",
+        title: "O total do dia não pode passar de 8h.",
+        description: "Some todos os projetos e atividades lançados no dia.",
+      });
       return;
     }
 
@@ -345,12 +352,16 @@ const WorkHoursPage = () => {
           <span className="text-sm text-muted-foreground">
             {day?.date && day.date === day.yesterday ? "Total de ontem" : "Total do dia"}
           </span>
-          <span className="font-mono text-lg font-bold text-primary">{formatMinutes(totalMinutes)}</span>
+          <span
+            className={`font-mono text-lg font-bold ${totalMinutes > MAX_DAY_MINUTES ? "text-destructive" : "text-primary"}`}
+          >
+            {formatMinutes(totalMinutes)} / {formatMinutes(MAX_DAY_MINUTES)}
+          </span>
         </div>
 
         <button
           onClick={() => void save()}
-          disabled={isSaving || isLoading}
+          disabled={isSaving || isLoading || totalMinutes > MAX_DAY_MINUTES}
           className="w-full sm:w-auto px-6 py-3 text-sm rounded bg-primary text-primary-foreground font-bold hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
         >
           {isSaving ? "Salvando..." : "Salvar"}
