@@ -130,12 +130,6 @@ const DashboardPage = () => {
                 subtitle={formatMonth(data.monthLabel)}
                 icon={<Clock className="h-4 w-4" />}
               />
-              <StatCard
-                title="Prazo vencido"
-                value={data.overdueProjects}
-                subtitle="projetos em andamento"
-                icon={<AlertTriangle className="h-4 w-4" />}
-              />
             </div>
 
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -240,6 +234,15 @@ const DashboardPage = () => {
                 ]}
               />
             </section>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+              <StatCard
+                title="Prazo vencido"
+                value={data.overdueProjects}
+                subtitle="projetos em andamento"
+                icon={<AlertTriangle className="h-4 w-4" />}
+              />
+            </div>
           </>
         )}
       </div>
