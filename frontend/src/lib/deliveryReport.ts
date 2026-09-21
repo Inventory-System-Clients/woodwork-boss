@@ -50,9 +50,11 @@ export const printDeliveryReport = (project: ProjectDetail, client: Client | nul
     .map((cost) => `<tr><td>${escapeHtml(cost.description)}</td><td class="r">${formatCurrency(cost.amount)}</td></tr>`)
     .join("");
 
+  // CPF/CNPJ informed on the project wins; the client's registration is the fallback for older projects.
+  const clientDocument = project.clientDocument || client?.document || null;
+
   const clientLines = infoLines([
     client?.companyName ? `${client.companyName}` : null,
-    client?.document ? `CPF/CNPJ: ${client.document}` : null,
     client?.contactName ? `Contato: ${client.contactName}` : null,
     client?.phone ? `Telefone: ${client.phone}` : null,
     client?.email ? `E-mail: ${client.email}` : null,
@@ -61,7 +63,6 @@ export const printDeliveryReport = (project: ProjectDetail, client: Client | nul
 
   const companyLines = infoLines([
     COMPANY.legalName,
-    COMPANY.document ? `CNPJ: ${COMPANY.document}` : null,
     COMPANY.phone ? `Telefone: ${COMPANY.phone}` : null,
     COMPANY.email ? `E-mail: ${COMPANY.email}` : null,
     COMPANY.website,
@@ -103,8 +104,12 @@ th,td{border-bottom:1px solid #ddd;padding:7px 6px;text-align:left}
 </div>
 
 <div class="parties">
-  <div class="box"><h3>Empresa</h3><div class="name">${escapeHtml(COMPANY.name)}</div>${companyLines}</div>
-  <div class="box"><h3>Cliente</h3><div class="name">${escapeHtml(project.clientName)}</div>${clientLines}</div>
+  <div class="box"><h3>Empresa</h3><div class="name">${escapeHtml(COMPANY.name)}</div>${
+    COMPANY.document ? `<div><b>CNPJ:</b> ${escapeHtml(COMPANY.document)}</div>` : ""
+  }${companyLines}</div>
+  <div class="box"><h3>Cliente</h3><div class="name">${escapeHtml(project.clientName)}</div>${
+    clientDocument ? `<div><b>CPF/CNPJ:</b> ${escapeHtml(clientDocument)}</div>` : ""
+  }${clientLines}</div>
 </div>
 
 <h2>Projeto: ${escapeHtml(project.name)}</h2>

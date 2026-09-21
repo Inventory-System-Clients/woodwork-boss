@@ -44,6 +44,7 @@ export interface ProjectDetail {
   id: string;
   name: string;
   clientName: string;
+  clientDocument: string | null;
   deadline: string | null;
   status: ProjectStatus;
   lastUpdateNote: string | null;
@@ -97,6 +98,7 @@ export interface CreateProjectCostInput {
 export interface UpdateProjectInput {
   name?: string;
   clientName?: string;
+  clientDocument?: string;
   deadline?: string | null;
   status?: ProjectStatus;
   lastUpdateNote?: string | null;
@@ -161,6 +163,7 @@ const mapCost = (item: ProjectCost): ProjectCost => ({
 const mapDetail = (item: ProjectDetail): ProjectDetail => ({
   ...item,
   status: normalizeStatus(item.status),
+  clientDocument: item.clientDocument ?? null,
   lastUpdateNote: item.lastUpdateNote ?? null,
   lastUpdateAt: item.lastUpdateAt ?? null,
   laborValue: num(item.laborValue),
@@ -180,7 +183,12 @@ export const listProjects = async () =>
 export const getProject = async (id: string) =>
   mapDetail(unwrap<ProjectDetail>(await request<unknown>(`/projects/${encodeURIComponent(id)}`)));
 
-export const createProject = async (input: { name: string; clientName: string; status: ProjectStatus }) =>
+export const createProject = async (input: {
+  name: string;
+  clientName: string;
+  clientDocument: string;
+  status: ProjectStatus;
+}) =>
   mapDetail(
     unwrap<ProjectDetail>(await request<unknown>("/projects", { method: "POST", body: JSON.stringify(input) })),
   );

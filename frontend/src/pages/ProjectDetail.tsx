@@ -463,6 +463,12 @@ const ProjectDetailPage = () => {
                 onSave={(value) => (value ? saveField({ clientName: value }) : Promise.resolve())}
               />
               <EditableText
+                label="CPF / CNPJ do cliente"
+                value={project.clientDocument ?? ""}
+                display={project.clientDocument || "Não informado"}
+                onSave={(value) => (value ? saveField({ clientDocument: value }) : Promise.resolve())}
+              />
+              <EditableText
                 label="Prazo de entrega"
                 type="date"
                 value={project.deadline ?? ""}

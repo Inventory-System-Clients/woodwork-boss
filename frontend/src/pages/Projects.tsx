@@ -30,7 +30,9 @@ export const ProjectStatusBadge = ({ status }: { status: ProjectStatus }) => (
   </span>
 );
 
-const emptyForm = { name: "", clientName: "", status: "Em andamento" as ProjectStatus };
+const emptyForm = { name: "", clientName: "", clientDocument: "", status: "Em andamento" as ProjectStatus };
+
+const isValidDocument = (value: string) => [11, 14].includes(value.replace(/\D/g, "").length);
 
 const ProjectsPage = () => {
   const navigate = useNavigate();
@@ -66,12 +68,18 @@ const ProjectsPage = () => {
       return;
     }
 
+    if (!isValidDocument(form.clientDocument)) {
+      toast({ variant: "destructive", title: "Informe um CPF (11 dígitos) ou CNPJ (14 dígitos) válido do cliente." });
+      return;
+    }
+
     setIsSaving(true);
 
     try {
       const created = await createProject({
         name: form.name.trim(),
         clientName: form.clientName.trim(),
+        clientDocument: form.clientDocument.trim(),
         status: form.status,
       });
 
@@ -146,6 +154,13 @@ const ProjectsPage = () => {
             value={form.clientName}
             onChange={(event) => setForm((current) => ({ ...current, clientName: event.target.value }))}
             placeholder="Ex.: Milk Moo"
+          />
+          <FormField
+            label="CPF ou CNPJ do cliente"
+            value={form.clientDocument}
+            onChange={(event) => setForm((current) => ({ ...current, clientDocument: event.target.value }))}
+            placeholder="000.000.000-00 ou 00.000.000/0000-00"
+            inputMode="numeric"
           />
           <FormField
             label="Status"
