@@ -145,7 +145,7 @@ const ProjectDetailPage = () => {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
-  const [deliveryValues, setDeliveryValues] = useState({ labor: "", discount: "" });
+  const [deliveryValues, setDeliveryValues] = useState({ labor: "", discount: "", finalValue: "" });
   const [isSavingDelivery, setIsSavingDelivery] = useState(false);
 
   const load = async () => {
@@ -173,8 +173,9 @@ const ProjectDetailPage = () => {
     setDeliveryValues({
       labor: project ? String(project.laborValue) : "",
       discount: project ? String(project.discountValue) : "",
+      finalValue: project?.finalValue != null ? String(project.finalValue) : "",
     });
-  }, [project?.laborValue, project?.discountValue]);
+  }, [project?.laborValue, project?.discountValue, project?.finalValue]);
 
   useEffect(() => {
     void listProductionImages(id).then(setImages).catch(() => setImages([]));
@@ -317,7 +318,16 @@ const ProjectDetailPage = () => {
     const labor = Number(deliveryValues.labor.replace(",", ".") || 0);
     const discount = Number(deliveryValues.discount.replace(",", ".") || 0);
 
-    if (!Number.isFinite(labor) || !Number.isFinite(discount) || labor < 0 || discount < 0) {
+    const finalText = deliveryValues.finalValue.trim();
+    const finalValue = finalText === "" ? null : Number(finalText.replace(",", "."));
+
+    if (
+      !Number.isFinite(labor) ||
+      !Number.isFinite(discount) ||
+      labor < 0 ||
+      discount < 0 ||
+      (finalValue !== null && (!Number.isFinite(finalValue) || finalValue < 0))
+    ) {
       toast({ variant: "destructive", title: "Informe valores válidos (não negativos)." });
       return;
     }
@@ -325,7 +335,7 @@ const ProjectDetailPage = () => {
     setIsSavingDelivery(true);
 
     try {
-      setProject(await updateProject(id, { laborValue: labor, discountValue: discount }));
+      setProject(await updateProject(id, { laborValue: labor, discountValue: discount, finalValue }));
       toast({ title: "Valores de entrega salvos" });
     } catch (saveError) {
       notifyError("Não foi possível salvar os valores", saveError);
@@ -566,17 +576,18 @@ const ProjectDetailPage = () => {
 
             <section className="border border-border rounded bg-card p-4 sm:p-5 space-y-3">
               <h2 className="text-[11px] uppercase tracking-widest text-muted-foreground font-bold">
-                Valores do PDF de entrega ao cliente
+                Valor final e PDF de entrega ao cliente
               </h2>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
                 <FormField
-                  label="Mão de obra (R$)"
+                  label="Valor final cobrado (R$)"
                   type="number"
                   inputMode="decimal"
                   min={0}
                   step="0.01"
-                  value={deliveryValues.labor}
-                  onChange={(event) => setDeliveryValues((current) => ({ ...current, labor: event.target.value }))}
+                  value={deliveryValues.finalValue}
+                  onChange={(event) => setDeliveryValues((current) => ({ ...current, finalValue: event.target.value }))}
+                  placeholder="Ex.: 25000"
                 />
                 <FormField
                   label="Desconto (R$)"
@@ -587,6 +598,15 @@ const ProjectDetailPage = () => {
                   value={deliveryValues.discount}
                   onChange={(event) => setDeliveryValues((current) => ({ ...current, discount: event.target.value }))}
                 />
+                <FormField
+                  label="Mão de obra (R$) - se sem valor final"
+                  type="number"
+                  inputMode="decimal"
+                  min={0}
+                  step="0.01"
+                  value={deliveryValues.labor}
+                  onChange={(event) => setDeliveryValues((current) => ({ ...current, labor: event.target.value }))}
+                />
                 <button
                   onClick={() => void saveDeliveryValues()}
                   disabled={isSavingDelivery}
@@ -595,11 +615,33 @@ const ProjectDetailPage = () => {
                   {isSavingDelivery ? "SALVANDO..." : "SALVAR VALORES"}
                 </button>
               </div>
+              {(() => {
+                const totals = calculateDeliveryTotals(project);
+
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                    <div>
+                      <p className="text-muted-foreground">
+                        Valor final {totals.hasFinalValue ? "(informado)" : "(itens + mão de obra − desconto)"}
+                      </p>
+                      <p className="font-mono font-bold text-foreground">{formatCurrency(totals.total)}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Custo total (com comissões)</p>
+                      <p className="font-mono font-bold text-foreground">{formatCurrency(project.totals.totalCost)}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Lucro (valor final − custos)</p>
+                      <p className={`font-mono font-bold ${totals.profit < 0 ? "text-destructive" : "text-success"}`}>
+                        {formatCurrency(totals.profit)}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })()}
               <p className="text-xs text-muted-foreground">
-                Valor final ao cliente (itens sem comissões + mão de obra − desconto):{" "}
-                <span className="font-mono font-bold text-foreground">
-                  {formatCurrency(calculateDeliveryTotals(project).total)}
-                </span>
+                No PDF do cliente, a mão de obra é calculada para fechar com o valor final informado (valor final +
+                desconto − itens). Deixe o valor final vazio para usar a mão de obra digitada.
               </p>
             </section>
 

@@ -50,6 +50,8 @@ export interface ProjectDetail {
   lastUpdateAt: string | null;
   laborValue: number;
   discountValue: number;
+  /** Price charged to the client; null until registered. */
+  finalValue: number | null;
   createdAt: string | null;
   finishedAt: string | null;
   totals: ProjectTotals;
@@ -100,6 +102,7 @@ export interface UpdateProjectInput {
   lastUpdateNote?: string | null;
   laborValue?: number;
   discountValue?: number;
+  finalValue?: number | null;
 }
 
 export const formatCurrency = (value: number) =>
@@ -162,6 +165,7 @@ const mapDetail = (item: ProjectDetail): ProjectDetail => ({
   lastUpdateAt: item.lastUpdateAt ?? null,
   laborValue: num(item.laborValue),
   discountValue: num(item.discountValue),
+  finalValue: item.finalValue === null || item.finalValue === undefined ? null : num(item.finalValue),
   createdAt: item.createdAt ?? null,
   finishedAt: item.finishedAt ?? null,
   totals: mapTotals(item.totals),

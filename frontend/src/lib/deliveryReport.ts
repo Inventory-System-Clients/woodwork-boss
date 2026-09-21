@@ -24,9 +24,16 @@ export const calculateDeliveryTotals = (project: ProjectDetail) => {
   // Only what was bought for the project is shown to the client: commissions are internal.
   const items = project.costs.filter((cost) => !cost.isCommission);
   const itemsTotal = items.reduce((sum, cost) => sum + cost.amount, 0);
-  const total = Math.max(0, itemsTotal + project.laborValue - project.discountValue);
+  const hasFinalValue = project.finalValue !== null;
+  // With a registered final value, labor is what is left after items and discount, so the lines always add up.
+  const labor = hasFinalValue
+    ? Math.max(0, (project.finalValue as number) + project.discountValue - itemsTotal)
+    : project.laborValue;
+  const total = hasFinalValue ? (project.finalValue as number) : Math.max(0, itemsTotal + labor - project.discountValue);
+  // Profit: what the client pays minus everything the project cost (items and commissions).
+  const profit = total - project.totals.totalCost;
 
-  return { items, itemsTotal, total };
+  return { items, itemsTotal, labor, total, profit, hasFinalValue };
 };
 
 /**
@@ -36,7 +43,7 @@ export const calculateDeliveryTotals = (project: ProjectDetail) => {
  */
 export const printDeliveryReport = (project: ProjectDetail, client: Client | null): boolean => {
   const isFinished = project.status === "Finalizado";
-  const { items, itemsTotal, total } = calculateDeliveryTotals(project);
+  const { items, itemsTotal, labor, total } = calculateDeliveryTotals(project);
   const logoUrl = `${window.location.origin}${COMPANY.logoPath}`;
 
   const itemRows = items
@@ -116,7 +123,7 @@ th,td{border-bottom:1px solid #ddd;padding:7px 6px;text-align:left}
 <h2>Valores</h2>
 <table class="summary">
   <tr><td>Materiais e itens</td><td class="r">${formatCurrency(itemsTotal)}</td></tr>
-  <tr><td>Mão de obra</td><td class="r">${formatCurrency(project.laborValue)}</td></tr>
+  <tr><td>Mão de obra</td><td class="r">${formatCurrency(labor)}</td></tr>
   ${project.discountValue > 0 ? `<tr><td>Desconto</td><td class="r">- ${formatCurrency(project.discountValue)}</td></tr>` : ""}
   <tr class="grand"><td>Valor final</td><td class="r">${formatCurrency(total)}</td></tr>
 </table>
