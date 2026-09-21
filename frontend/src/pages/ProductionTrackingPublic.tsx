@@ -385,20 +385,9 @@ const ProductionTrackingPublicPage = () => {
                       {data.projectStatus}
                     </span>
                   )}
-                  <StatusBadge status={data.productionStatus} />
                 </div>
               </div>
 
-              <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                <div className="rounded border border-border bg-secondary/20 px-3 py-2">
-                  <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Entrega prevista</p>
-                  <p className="mt-1 font-medium text-foreground">{formatDate(data.deliveryDate)}</p>
-                </div>
-                <div className="rounded border border-border bg-secondary/20 px-3 py-2">
-                  <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Equipe responsavel</p>
-                  <p className="mt-1 font-medium text-foreground">{data.installationTeam || "A definir"}</p>
-                </div>
-              </div>
             </div>
 
             <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
@@ -406,26 +395,6 @@ const ProductionTrackingPublicPage = () => {
               <p className="mt-2 text-sm leading-relaxed text-foreground/90 whitespace-pre-wrap">
                 {data.description || "Sem descricao informada."}
               </p>
-            </div>
-
-            <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
-              <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Etapas em andamento</p>
-
-              {orderedStatuses.length === 0 ? (
-                <p className="mt-2 text-sm text-muted-foreground">Nenhuma etapa registrada ate o momento.</p>
-              ) : (
-                <ol className="mt-3 space-y-2">
-                  {orderedStatuses.map((status) => (
-                    <li key={status.id} className="rounded border border-border bg-secondary/20 px-3 py-2">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-sm font-semibold text-foreground">{status.stageName}</p>
-                        <p className="text-xs text-muted-foreground">{formatDateTime(status.createdAt)}</p>
-                      </div>
-                      <p className="mt-1 text-xs text-foreground/80">Equipe: {status.teamName || "Nao informada"}</p>
-                    </li>
-                  ))}
-                </ol>
-              )}
             </div>
 
             <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
@@ -443,24 +412,24 @@ const ProductionTrackingPublicPage = () => {
             <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
               <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Materiais utilizados</p>
 
-              {data.materials.length === 0 ? (
-                <p className="mt-2 text-sm text-muted-foreground">Nenhum material registrado.</p>
+              {data.items.length === 0 ? (
+                <p className="mt-2 text-sm text-muted-foreground">Nenhum item registrado ate o momento.</p>
               ) : (
                 <div className="mt-3 overflow-x-auto">
-                  <table className="w-full min-w-[420px] border-collapse text-sm">
+                  <table className="w-full border-collapse text-sm">
                     <thead>
                       <tr className="border-b border-border text-muted-foreground">
-                        <th className="py-2 text-left font-semibold">Material</th>
-                        <th className="py-2 text-right font-semibold">Quantidade</th>
-                        <th className="py-2 text-right font-semibold">Unidade</th>
+                        <th className="py-2 text-left font-semibold">Item</th>
+                        <th className="py-2 text-right font-semibold">Valor</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border/50">
-                      {data.materials.map((material, index) => (
-                        <tr key={`${material.productId}-${index}`}>
-                          <td className="py-2 pr-2 text-foreground/90">{material.productName}</td>
-                          <td className="py-2 pr-2 text-right font-mono text-foreground/80">{material.quantity}</td>
-                          <td className="py-2 text-right text-foreground/80">{material.unit}</td>
+                      {data.items.map((item, index) => (
+                        <tr key={`${item.id}-${index}`}>
+                          <td className="py-2 pr-2 text-foreground/90">{item.name}</td>
+                          <td className="py-2 text-right font-mono text-foreground/80">
+                            {item.amount.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                          </td>
                         </tr>
                       ))}
                     </tbody>

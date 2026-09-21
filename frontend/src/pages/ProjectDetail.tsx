@@ -682,7 +682,7 @@ const ProjectDetailPage = () => {
                 </button>
               </div>
               <p className="text-xs text-muted-foreground">
-                O cliente vê o status, o prazo, as fotos e a última atualização, sem nenhum valor financeiro.
+                O cliente vê o status do projeto, os itens cadastrados (sem comissões), as fotos e a última atualização.
               </p>
 
               <div className="space-y-2">

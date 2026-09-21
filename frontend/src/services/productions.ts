@@ -60,6 +60,8 @@ export interface SharedProductionSnapshot extends EmployeeProduction {
   observations: string;
   projectStatus: string;
   lastUpdateAt: string;
+  /** Registered costs (commissions excluded) shown to the client. */
+  items: Array<{ id: string; name: string; amount: number }>;
   updatedAt: string;
   images: SharedProductionImage[];
 }
@@ -825,6 +827,15 @@ const mapSharedProduction = (value: unknown, token: string): SharedProductionSna
     ...production,
     observations: toStringSafe(item.observations ?? item.notes ?? item.note, "").trim(),
     projectStatus: toStringSafe(item.projectStatus, "").trim(),
+    items: (Array.isArray(item.items) ? item.items : []).map((value) => {
+      const row = toRecord(value) ?? {};
+
+      return {
+        id: toStringSafe(row.id, ""),
+        name: toStringSafe(row.name, "Item"),
+        amount: toNumber(row.amount),
+      };
+    }),
     lastUpdateAt: toStringSafe(item.lastUpdateAt, "").trim(),
     updatedAt: toStringSafe(item.updatedAt ?? item.updated_at, ""),
     images,
