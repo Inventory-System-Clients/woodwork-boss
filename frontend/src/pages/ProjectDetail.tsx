@@ -451,7 +451,7 @@ const ProjectDetailPage = () => {
 
         {project && (
           <>
-            <section className="border border-border rounded bg-card p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <section className="border border-border rounded bg-card p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               <EditableText
                 label="Projeto"
                 value={project.name}
@@ -467,13 +467,6 @@ const ProjectDetailPage = () => {
                 value={project.clientDocument ?? ""}
                 display={project.clientDocument || "Não informado"}
                 onSave={(value) => (value ? saveField({ clientDocument: value }) : Promise.resolve())}
-              />
-              <EditableText
-                label="Prazo de entrega"
-                type="date"
-                value={project.deadline ?? ""}
-                display={formatDateOnly(project.deadline)}
-                onSave={(value) => saveField({ deadline: value || null })}
               />
               <div className="space-y-1">
                 <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Status</p>

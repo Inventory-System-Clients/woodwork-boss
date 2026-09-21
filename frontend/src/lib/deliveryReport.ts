@@ -115,7 +115,6 @@ th,td{border-bottom:1px solid #ddd;padding:7px 6px;text-align:left}
 <h2>Projeto: ${escapeHtml(project.name)}</h2>
 <div class="dates">
   <div><b>Data de início</b>${formatDate(project.createdAt)}</div>
-  <div><b>Prazo de entrega</b>${formatDate(project.deadline)}</div>
   <div><b>Data de finalização</b>${isFinished ? formatDate(project.finishedAt) : "Em andamento"}</div>
 </div>
 

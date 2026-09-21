@@ -127,7 +127,6 @@ const ProjectsPage = () => {
             columns={[
               { key: "name", header: "Projeto" },
               { key: "clientName", header: "Cliente" },
-              { key: "deadline", header: "Prazo", render: (project) => formatDateOnly(project.deadline) },
               { key: "status", header: "Status", render: (project) => <ProjectStatusBadge status={project.status} /> },
               {
                 key: "totalCost",
