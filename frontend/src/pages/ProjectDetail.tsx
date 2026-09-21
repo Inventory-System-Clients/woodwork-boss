@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Check, FileText, ImagePlus, Link2, Plus, Trash2, Undo2 } from "lucide-react";
 import { DashboardLayout } from "@/layouts/DashboardLayout";
 import { DataTable } from "@/components/DataTable";
@@ -9,6 +9,7 @@ import { StatCard } from "@/components/StatCard";
 import { toast } from "@/components/ui/use-toast";
 import {
   addProjectCost,
+  deleteProject,
   deleteProjectCost,
   formatCurrency,
   formatDateOnly,
@@ -130,6 +131,8 @@ function EditableText({ label, value, type = "text", display, onSave }: Editable
 
 const ProjectDetailPage = () => {
   const { id = "" } = useParams();
+  const navigate = useNavigate();
+  const [isDeleting, setIsDeleting] = useState(false);
   const [project, setProject] = useState<ProjectDetail | null>(null);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -361,6 +364,29 @@ const ProjectDetailPage = () => {
     }
   };
 
+  const removeProject = async () => {
+    if (!project) return;
+
+    const confirmed = window.confirm(
+      `Excluir o projeto “${project.name}” (${project.clientName})?
+
+Os custos, fotos, link de acompanhamento e materiais serão apagados. Esta ação não pode ser desfeita.`,
+    );
+
+    if (!confirmed) return;
+
+    setIsDeleting(true);
+
+    try {
+      await deleteProject(id);
+      toast({ title: "Projeto excluído" });
+      navigate("/projects", { replace: true });
+    } catch (deleteError) {
+      notifyError("Não foi possível excluir o projeto", deleteError);
+      setIsDeleting(false);
+    }
+  };
+
   const exportPdf = () => {
     if (project && !printProjectReport(project)) {
       toast({
@@ -431,6 +457,15 @@ const ProjectDetailPage = () => {
             >
               <FileText className="h-3.5 w-3.5" />
               {project.status === "Finalizado" ? "PDF DE ENTREGA AO CLIENTE" : "PDF AO CLIENTE (PRÉVIA)"}
+            </button>
+          )}
+          {project && (
+            <button
+              onClick={() => void removeProject()}
+              disabled={isDeleting}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded border border-destructive/40 text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-60"
+            >
+              <Trash2 className="h-3.5 w-3.5" /> {isDeleting ? "EXCLUINDO..." : "EXCLUIR PROJETO"}
             </button>
           )}
         </div>

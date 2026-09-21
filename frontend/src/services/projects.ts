@@ -204,6 +204,10 @@ export const updateProject = async (id: string, input: UpdateProjectInput) =>
     ),
   );
 
+export const deleteProject = async (id: string) => {
+  await request<unknown>(`/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
+};
+
 export const addProjectCost = async (projectId: string, input: CreateProjectCostInput) =>
   mapCost(
     unwrap<ProjectCost>(
