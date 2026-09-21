@@ -69,7 +69,7 @@ export interface CreateProductionInput {
   installationTeamId: string;
   budgetId?: string;
   initialCost: number;
-  materials: ProductionMaterial[];
+  materials?: ProductionMaterial[];
   expenses?: ProductionExpenseInput[];
 }
 
@@ -111,6 +111,22 @@ export interface ProductionCostReport {
   expensesTotal: number;
   totalSpent: number;
   balance: number;
+  profitPercent: number;
+  commissionPercent: number;
+  profitValue: number;
+  commissionValue: number;
+  netProfit: number;
+  salePrice: number;
+}
+
+export interface UpdateProductionInput {
+  clientName?: string;
+  description?: string;
+  deliveryDate?: string | null;
+  installationTeamId?: string;
+  initialCost?: number;
+  profitPercent?: number;
+  commissionPercent?: number;
 }
 
 export type AdvanceProductionStatusInput =
@@ -454,7 +470,7 @@ const mapShareProductionError = (error: ApiError) => {
       return new ProductionShareError({
         status: 403,
         code: "forbidden",
-        message: "Acesso negado. Apenas admin e gerente podem compartilhar producao.",
+        message: "Acesso negado. Apenas admin podem compartilhar producao.",
       });
     case 404:
       return new ProductionShareError({
@@ -518,7 +534,7 @@ const mapProductionImageError = (error: ApiError) => {
       return new ProductionImageError({
         status: 403,
         code: "forbidden",
-        message: "Acesso negado. Apenas admin e gerente podem gerenciar imagens da producao.",
+        message: "Acesso negado. Apenas admin podem gerenciar imagens da producao.",
       });
     case 404:
       return new ProductionImageError({
@@ -951,7 +967,51 @@ export const getProductionCostReport = async (productionId: string): Promise<Pro
     expensesTotal: toNumber(data.expensesTotal),
     totalSpent: toNumber(data.totalSpent),
     balance: toNumber(data.balance),
+    profitPercent: toNumber(data.profitPercent),
+    commissionPercent: toNumber(data.commissionPercent),
+    profitValue: toNumber(data.profitValue),
+    commissionValue: toNumber(data.commissionValue),
+    netProfit: toNumber(data.netProfit),
+    salePrice: toNumber(data.salePrice),
   };
+};
+
+export const updateProduction = async (productionId: string, input: UpdateProductionInput) => {
+  const payload = await request<unknown>(`/productions/${encodeURIComponent(productionId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+
+  return ensureProduction(payload, "Nao foi possivel atualizar a producao.");
+};
+
+/** Replaces the whole material list of the production. */
+export interface ProductionMaterialInput {
+  productId?: string;
+  productName: string;
+  quantity: number;
+  unit: string;
+  unitPrice: number;
+}
+
+export const setProductionMaterials = async (productionId: string, materials: ProductionMaterialInput[]) => {
+  const payload = await request<unknown>(`/productions/${encodeURIComponent(productionId)}/materials`, {
+    method: "PUT",
+    body: JSON.stringify({ materials }),
+  });
+
+  return ensureProduction(payload, "Nao foi possivel atualizar os materiais.");
+};
+
+export const updateProductionExpense = async (
+  productionId: string,
+  expenseId: string,
+  input: Partial<ProductionExpenseInput>,
+) => {
+  await request<unknown>(
+    `/productions/${encodeURIComponent(productionId)}/expenses/${encodeURIComponent(expenseId)}`,
+    { method: "PATCH", body: JSON.stringify(input) },
+  );
 };
 
 export const deleteProduction = async (productionId: string) => {
@@ -963,7 +1023,7 @@ export const deleteProduction = async (productionId: string) => {
     if (error instanceof ApiError) {
       switch (error.status) {
         case 403:
-          throw new Error("Acesso negado. Apenas admin e gerente podem excluir producao.");
+          throw new Error("Acesso negado. Apenas admin podem excluir producao.");
         case 404:
           throw new Error("Producao nao encontrada. Ela pode ja ter sido excluida.");
         case 409:

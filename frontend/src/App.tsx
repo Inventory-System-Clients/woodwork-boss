@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -18,6 +18,10 @@ import BudgetsPage from "./pages/Budgets.tsx";
 import ProductionPage from "./pages/Production.tsx";
 import ProductionTrackingPublicPage from "./pages/ProductionTrackingPublic.tsx";
 import WorkHoursPage from "./pages/WorkHours.tsx";
+import ProjectsPage from "./pages/Projects.tsx";
+import ProjectDetailPage from "./pages/ProjectDetail.tsx";
+import HoursReportPage from "./pages/HoursReport.tsx";
+import LogisticsPage from "./pages/Logistics.tsx";
 
 const queryClient = new QueryClient();
 
@@ -38,12 +42,13 @@ const App = () => (
                 <Route path="/production" element={<ProductionPage />} />
                 <Route path="/forbidden" element={<ForbiddenPage />} />
 
-                <Route element={<RequireRoles allowedRoles={["funcionario"]} />}>
-                  <Route path="/hours" element={<WorkHoursPage />} />
-                </Route>
+                <Route path="/hours" element={<WorkHoursPage />} />
 
-                <Route element={<RequireRoles allowedRoles={["admin", "gerente"]} />}>
-                  <Route path="/logistics" element={<Navigate to="/" replace />} />
+                <Route element={<RequireRoles allowedRoles={["admin"]} />}>
+                  <Route path="/projects" element={<ProjectsPage />} />
+                  <Route path="/projects/:id" element={<ProjectDetailPage />} />
+                  <Route path="/hours-report" element={<HoursReportPage />} />
+                  <Route path="/logistics" element={<LogisticsPage />} />
                   <Route path="/clients" element={<ClientsPage />} />
                   <Route path="/employees" element={<EmployeesPage />} />
                   <Route path="/teams" element={<TeamsPage />} />

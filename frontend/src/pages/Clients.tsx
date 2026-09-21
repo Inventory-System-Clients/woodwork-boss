@@ -137,7 +137,7 @@ const buildClientsRequestErrorMessage = (error: unknown) => {
       case 401:
         return "Sessao expirada. Redirecionando para login.";
       case 403:
-        return "Acesso negado. Somente admin e gerente podem acessar Clientes.";
+        return "Acesso negado. Somente admin podem acessar Clientes.";
       case 404:
         return "Endpoint /api/clients nao encontrado no backend.";
       case 500:

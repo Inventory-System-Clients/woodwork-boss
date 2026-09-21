@@ -35,6 +35,7 @@ import {
   uploadProductionImages,
 } from "@/services/productions";
 import { ImagePlus, Pencil, Plus, Printer, Receipt, Share2, Trash2 } from "lucide-react";
+import { ProductionEditPanel } from "@/components/ProductionEditPanel";
 
 const statusLabels: Record<string, string> = {
   pending: "Pendente",
@@ -61,7 +62,7 @@ const formatStageLabel = (value: string) => {
   return statusLabels[normalized] || normalized;
 };
 
-/** Approval/delivery stages close the production, so only admin/gerente may use them. */
+/** Approval/delivery stages close the production, so only admin may use them. */
 const isApprovalStageName = (name: string) => {
   const normalized = name
     .trim()
@@ -103,7 +104,7 @@ const buildShareErrorMessage = (error: unknown) => {
       case 401:
         return "Sessao expirada. Faca login novamente.";
       case 403:
-        return "Acesso negado. Apenas admin e gerente podem compartilhar producao.";
+        return "Acesso negado. Apenas admin podem compartilhar producao.";
       case 404:
         return "Producao nao encontrada para compartilhamento.";
       case 500:
@@ -156,7 +157,7 @@ const buildImageErrorMessage = (error: unknown) => {
       case 401:
         return "Sessao expirada. Faca login novamente.";
       case 403:
-        return "Acesso negado. Apenas admin e gerente podem gerenciar imagens.";
+        return "Acesso negado. Apenas admin podem gerenciar imagens.";
       case 404:
         return "Producao nao encontrada para gerenciar imagens.";
       case 413:
@@ -1013,20 +1014,14 @@ const ProductionPage = () => {
       !form.clientId ||
       !form.description.trim() ||
       !form.deliveryDate ||
-      !form.installationTeamId ||
-      form.initialCost <= 0 ||
-      form.materials.length === 0
+      !form.installationTeamId
     ) {
-      setFormError("Preencha cliente, descrição, prazo, equipe, custo inicial e pelo menos um material.");
+      setFormError("Preencha cliente, descrição, prazo e equipe.");
       return;
     }
 
-    const hasInvalidMaterial = form.materials.some(
-      (material) => !material.productId || !material.productName,
-    );
-
-    if (hasInvalidMaterial) {
-      setFormError("Todos os materiais devem estar vinculados a um produto do banco.");
+    if (!Number.isFinite(Number(form.initialCost)) || Number(form.initialCost) < 0) {
+      setFormError("O custo inicial não pode ser negativo.");
       return;
     }
 
@@ -1068,7 +1063,6 @@ const ProductionPage = () => {
         budgetId: form.budgetId || undefined,
         initialCost: Number(form.initialCost),
         materials: form.materials,
-        expenses: form.expenses,
       });
 
       closeModal();
@@ -1417,6 +1411,12 @@ const ProductionPage = () => {
     }
   };
 
+  const handleProductionUpdated = async (updated: EmployeeProduction) => {
+    setData((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+    setReportOrder(updated);
+    await loadCostReport(updated.id);
+  };
+
   const printCostReport = () => {
     if (!costReport) {
       return;
@@ -1451,7 +1451,11 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
 <h2>Resumo</h2><table>
 <tr><td>Custo inicial previsto</td><td class="r">${formatCurrency(costReport.initialCost)}</td></tr>
 <tr class="total"><td>Total gasto ate agora</td><td class="r">${formatCurrency(costReport.totalSpent)}</td></tr>
-<tr class="total"><td>Saldo (previsto - gasto)</td><td class="r">${formatCurrency(costReport.balance)}</td></tr></table>
+<tr class="total"><td>Saldo (previsto - gasto)</td><td class="r">${formatCurrency(costReport.balance)}</td></tr>
+<tr><td>Lucro (${costReport.profitPercent}% sobre o total gasto)</td><td class="r">${formatCurrency(costReport.profitValue)}</td></tr>
+<tr><td>Comissao de funcionario (${costReport.commissionPercent}% sobre o lucro)</td><td class="r">${formatCurrency(costReport.commissionValue)}</td></tr>
+<tr class="total"><td>Lucro liquido</td><td class="r">${formatCurrency(costReport.netProfit)}</td></tr>
+<tr class="total"><td>Preco de venda (gasto + lucro)</td><td class="r">${formatCurrency(costReport.salePrice)}</td></tr></table>
 <script>window.onload=function(){window.print()}</script></body></html>`;
 
     const printWindow = window.open("", "_blank");
@@ -1875,242 +1879,34 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
               </div>
             </div>
 
-            <div>
-              <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-3">
-                Materiais que serão usados
-              </p>
-
-              {clientsError && (
-                <div className="mb-3 border border-destructive/40 bg-destructive/10 rounded px-3 py-2 text-sm text-destructive flex items-center justify-between gap-3">
-                  <span>{clientsError}</span>
-                  <button
-                    onClick={() => void loadClientsForForm()}
-                    className="px-2 py-1 text-[11px] font-bold rounded border border-destructive/30 hover:bg-destructive/20"
-                  >
-                    TENTAR NOVAMENTE
-                  </button>
-                </div>
-              )}
-
-              {!isLoadingClients && clientsCatalog.length === 0 && (
-                <p className="mb-3 text-xs text-destructive">
-                  Nenhum cliente cadastrado no banco. Cadastre um cliente antes de criar a producao.
-                </p>
-              )}
-
-              {productsError && (
-                <div className="mb-3 border border-destructive/40 bg-destructive/10 rounded px-3 py-2 text-sm text-destructive flex items-center justify-between gap-3">
-                  <span>{productsError}</span>
-                  <button
-                    onClick={() => void loadProductsForForm()}
-                    className="px-2 py-1 text-[11px] font-bold rounded border border-destructive/30 hover:bg-destructive/20"
-                  >
-                    TENTAR NOVAMENTE
-                  </button>
-                </div>
-              )}
-
-              {form.materials.length > 0 && (
-                <div className="border border-border rounded mb-3 divide-y divide-border/50">
-                  {form.materials.map((item, idx) => (
-                    <div key={`${item.productId}-${idx}`} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
-                      <span>
-                        {item.productName} x {item.quantity} {item.unit}
-                        {item.unitPrice ? (
-                          <span className="ml-2 text-xs text-muted-foreground">
-                            {formatCurrency(item.unitPrice)}/un = {formatCurrency(item.unitPrice * item.quantity)}
-                          </span>
-                        ) : null}
-                      </span>
-                      <button
-                        onClick={() => removeMaterial(idx)}
-                        className="text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div className="mb-3 flex flex-wrap gap-2">
-                {([
-                  { value: false, label: "Material cadastrado" },
-                  { value: true, label: "Cadastrar material novo" },
-                ] as const).map((option) => (
-                  <button
-                    key={option.label}
-                    type="button"
-                    onClick={() => setIsNewProductMode(option.value)}
-                    className={`px-3 py-1 text-[11px] font-bold rounded border transition-colors ${
-                      isNewProductMode === option.value
-                        ? "border-primary/40 bg-primary/10 text-primary"
-                        : "border-border text-muted-foreground hover:bg-secondary"
-                    }`}
-                  >
-                    {option.label}
-                  </button>
-                ))}
+            {clientsError && (
+              <div className="border border-destructive/40 bg-destructive/10 rounded px-3 py-2 text-sm text-destructive flex items-center justify-between gap-3">
+                <span>{clientsError}</span>
+                <button
+                  onClick={() => void loadClientsForForm()}
+                  className="px-2 py-1 text-[11px] font-bold rounded border border-destructive/30 hover:bg-destructive/20"
+                >
+                  TENTAR NOVAMENTE
+                </button>
               </div>
+            )}
 
-              {isNewProductMode ? (
-                <div className="space-y-2">
-                  <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-                    <div className="md:col-span-2">
-                      <FormField
-                        label="Nome do material"
-                        value={newProduct.name}
-                        onChange={(e) => setNewProduct((current) => ({ ...current, name: e.target.value }))}
-                        placeholder="Ex.: Dobradiça soft-close"
-                      />
-                    </div>
-                    <div className="md:col-span-3">
-                      <FormField
-                        label="Fornecedor (marca)"
-                        value={newProduct.supplier}
-                        onChange={(e) => setNewProduct((current) => ({ ...current, supplier: e.target.value }))}
-                        placeholder="Opcional. Ex.: Blum"
-                      />
-                    </div>
-                    <FormField
-                      label="Quantidade usada"
-                      type="number"
-                      min={1}
-                      step="1"
-                      value={newProduct.quantity}
-                      onChange={(e) => setNewProduct((current) => ({ ...current, quantity: Number(e.target.value) }))}
-                    />
-                    <FormField
-                      label="Unidade"
-                      value={newProduct.unit}
-                      onChange={(e) => setNewProduct((current) => ({ ...current, unit: e.target.value }))}
-                    />
-                    <FormField
-                      label="Preço unitário (R$)"
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      value={newProduct.unitPrice}
-                      onChange={(e) => setNewProduct((current) => ({ ...current, unitPrice: Number(e.target.value) }))}
-                    />
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    O material é cadastrado e já entra nos materiais deste projeto. O valor (quantidade × preço) conta como gasto no relatório de custos.
-                  </p>
-                  <button
-                    onClick={() => void addNewProductAsMaterial()}
-                    disabled={isCreatingProduct}
-                    className="px-3 py-2 text-xs font-bold rounded border border-primary/40 text-primary hover:bg-primary/10 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    {isCreatingProduct ? "CADASTRANDO..." : "CADASTRAR E ADICIONAR"}
-                  </button>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-                  <div className="md:col-span-2">
-                    <FormField
-                      label="Material"
-                      as="select"
-                      value={newMaterial.productId}
-                      onChange={(e) => setNewMaterial((current) => ({ ...current, productId: e.target.value }))}
-                      options={productsCatalog.map((product) => ({
-                        value: product.id,
-                        label: product.supplier ? `${product.name} (${product.supplier})` : product.name,
-                      }))}
-                    />
-                  </div>
-                  <FormField
-                    label="Quantidade"
-                    type="number"
-                    min={1}
-                    step="1"
-                    value={newMaterial.quantity}
-                    onChange={(e) => setNewMaterial((current) => ({ ...current, quantity: Number(e.target.value) }))}
-                  />
-                  <FormField
-                    label="Unidade"
-                    value={newMaterial.unit}
-                    onChange={(e) => setNewMaterial((current) => ({ ...current, unit: e.target.value }))}
-                  />
-                  <FormField
-                    label="Preço unitário (R$)"
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    value={newMaterial.unitPrice}
-                    onChange={(e) => setNewMaterial((current) => ({ ...current, unitPrice: Number(e.target.value) }))}
-                  />
-                  <div className="flex items-end md:col-span-5">
-                    <button
-                      onClick={addMaterial}
-                      disabled={isLoadingProducts || productsCatalog.length === 0}
-                      className="px-3 py-2 text-xs font-bold rounded border border-border hover:bg-secondary transition-colors text-foreground disabled:opacity-60 disabled:cursor-not-allowed"
-                    >
-                      {isLoadingProducts ? "CARREGANDO..." : "ADICIONAR"}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div>
-              <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-3">
-                Gastos do projeto (opcional)
+            {!isLoadingClients && clientsCatalog.length === 0 && (
+              <p className="text-xs text-destructive">
+                Nenhum cliente cadastrado no banco. Cadastre um cliente antes de criar a producao.
               </p>
+            )}
 
-              {form.expenses.length > 0 && (
-                <div className="border border-border rounded mb-3 divide-y divide-border/50">
-                  {form.expenses.map((expense, idx) => (
-                    <div key={`${expense.description}-${idx}`} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
-                      <span>
-                        {expense.description}
-                        {expense.category ? (
-                          <span className="ml-2 text-xs text-muted-foreground">{expense.category}</span>
-                        ) : null}
-                        <span className="ml-2 font-mono text-xs">{formatCurrency(expense.amount)}</span>
-                      </span>
-                      <button
-                        onClick={() => removeExpenseFromForm(idx)}
-                        className="text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
+            {form.materials.length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {form.materials.length} material(is) do orçamento aprovado serão importados automaticamente.
+              </p>
+            )}
 
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                <div className="md:col-span-2">
-                  <FormField
-                    label="Descrição do gasto"
-                    value={newExpense.description}
-                    onChange={(e) => setNewExpense((current) => ({ ...current, description: e.target.value }))}
-                    placeholder="Ex.: Frete, ferragens, terceirizado"
-                  />
-                </div>
-                <FormField
-                  label="Categoria"
-                  value={newExpense.category}
-                  onChange={(e) => setNewExpense((current) => ({ ...current, category: e.target.value }))}
-                  placeholder="Opcional"
-                />
-                <FormField
-                  label="Valor (R$)"
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={newExpense.amount}
-                  onChange={(e) => setNewExpense((current) => ({ ...current, amount: Number(e.target.value) }))}
-                />
-              </div>
-              <button
-                onClick={addExpenseToForm}
-                className="mt-3 px-3 py-2 text-xs font-bold rounded border border-border hover:bg-secondary transition-colors text-foreground"
-              >
-                ADICIONAR GASTO
-              </button>
-            </div>
+            <p className="text-xs text-muted-foreground">
+              Materiais, gastos, lucro (%) e comissão (%) podem ser informados depois, editando a produção
+              (botão de custos e relatório).
+            </p>
 
             {formError && <p className="text-sm text-destructive">{formError}</p>}
 
@@ -2139,11 +1935,9 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
                   isSaving ||
                   isLoadingTeams ||
                   isLoadingClients ||
-                  isLoadingProducts ||
                   isLoadingBudgets ||
                   teams.length === 0 ||
-                  clientsCatalog.length === 0 ||
-                  productsCatalog.length === 0
+                  clientsCatalog.length === 0
                 }
                 className="w-full sm:w-auto px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
               >
@@ -2566,8 +2360,8 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
         <Modal
           open={Boolean(reportOrder)}
           onClose={closeReportModal}
-          title={`Custos - ${reportOrder.clientName}`}
-          width="max-w-3xl"
+          title={`Detalhes e custos - ${reportOrder.clientName}`}
+          width="max-w-4xl"
         >
           <div className="space-y-4 max-h-[75dvh] overflow-y-auto pr-1">
             {reportError && (
@@ -2597,6 +2391,14 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
                     <Printer className="h-3.5 w-3.5" /> IMPRIMIR / SALVAR PDF
                   </button>
                 </div>
+
+                <ProductionEditPanel
+                  key={`${reportOrder.id}-${costReport.generatedAt}`}
+                  order={reportOrder}
+                  report={costReport}
+                  teams={teams}
+                  onUpdated={handleProductionUpdated}
+                />
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                   <div className="border border-border rounded p-3 bg-secondary/20">

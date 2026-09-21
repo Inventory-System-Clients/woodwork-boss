@@ -13,7 +13,7 @@ const buildProductsRequestErrorMessage = (error: unknown) => {
       case 401:
         return "Sessão expirada. Redirecionando para login.";
       case 403:
-        return "Acesso negado. Apenas admin e gerente podem acessar Materiais.";
+        return "Acesso negado. Apenas admin podem acessar Materiais.";
       case 500:
         return "Erro interno no servidor ao carregar materiais.";
       default:

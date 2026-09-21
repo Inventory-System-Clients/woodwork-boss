@@ -38,9 +38,11 @@ const toStringOrNull = (value: unknown) => (typeof value === "string" ? value : 
 const normalizeRole = (value: unknown): UserRole => {
   switch (value) {
     case "admin":
-    case "gerente":
     case "funcionario":
       return value;
+    case "gerente":
+      // Legacy profile: managers were merged into admin.
+      return "admin";
     default:
       return "funcionario";
   }

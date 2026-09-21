@@ -521,7 +521,6 @@ const EmployeesPage = () => {
               }
               options={[
                 { value: "admin", label: "Admin" },
-                { value: "gerente", label: "Gerente" },
                 { value: "funcionario", label: "Funcionário" },
               ]}
             />

@@ -319,7 +319,7 @@ const normalizeBudgetError = (error: unknown, fallback: string) => {
     }
 
     if (error.status === 403) {
-      return "Acesso negado. Somente admin e gerente podem gerenciar orçamentos.";
+      return "Acesso negado. Somente admin podem gerenciar orçamentos.";
     }
 
     if (error.status === 409) {

@@ -1,10 +1,10 @@
 import { Navigate } from "react-router-dom";
 import { useRoleAccess } from "@/auth/AuthProvider";
-import LogisticsPage from "./Logistics.tsx";
+import DashboardPage from "./Dashboard.tsx";
 
 /**
- * Home of the app. Managers land on Logistics (it replaced the old dashboard);
- * employees have a simplified area whose home is the daily hours page.
+ * Home of the app. Admins land on the dashboard (projects, costs and hours);
+ * employees have a simplified area whose home is the daily hours page (Bater ponto).
  */
 const Index = () => {
   const { isEmployee } = useRoleAccess();
@@ -13,7 +13,7 @@ const Index = () => {
     return <Navigate to="/hours" replace />;
   }
 
-  return <LogisticsPage />;
+  return <DashboardPage />;
 };
 
 export default Index;

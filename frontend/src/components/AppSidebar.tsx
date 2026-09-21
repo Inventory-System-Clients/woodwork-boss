@@ -1,4 +1,4 @@
-import { Users, User, Briefcase, Box, FileText, Hammer, Truck, Clock } from "lucide-react";
+import { User, Hammer, Clock, LayoutDashboard, FolderOpen, Timer } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useAuth } from "@/auth/AuthProvider";
 import type { UserRole } from "@/auth/types";
@@ -14,14 +14,13 @@ interface NavItem {
 }
 
 const navItems = [
-  { title: "Logística", url: "/", icon: Truck, allowedRoles: ["admin", "gerente"] },
-  { title: "Minhas horas", url: "/hours", icon: Clock, allowedRoles: ["funcionario"] },
-  { title: "Clientes", url: "/clients", icon: Users, allowedRoles: ["admin", "gerente"] },
-  { title: "Funcionários", url: "/employees", icon: User, allowedRoles: ["admin", "gerente"] },
-  { title: "Equipes", url: "/teams", icon: Briefcase, allowedRoles: ["admin", "gerente"] },
-  { title: "Materiais", url: "/products", icon: Box, allowedRoles: ["admin", "gerente"] },
-  { title: "Orçamentos", url: "/budgets", icon: FileText, allowedRoles: ["admin", "gerente"] },
-  { title: "Produção", url: "/production", icon: Hammer, allowedRoles: ["admin", "gerente", "funcionario"] },
+  { title: "Dashboard", url: "/", icon: LayoutDashboard, allowedRoles: ["admin"] },
+  { title: "Projetos", url: "/projects", icon: FolderOpen, allowedRoles: ["admin"] },
+  { title: "Bater ponto", url: "/hours", icon: Clock, allowedRoles: ["admin", "funcionario"] },
+  { title: "Horas por funcionário", url: "/hours-report", icon: Timer, allowedRoles: ["admin"] },
+  { title: "Funcionários", url: "/employees", icon: User, allowedRoles: ["admin"] },
+  // Pós-MVP (proposta): telas mantidas e acessíveis pela URL, mas fora do menu do administrador.
+  { title: "Produção", url: "/production", icon: Hammer, allowedRoles: ["funcionario"] },
 ] satisfies NavItem[];
 
 interface AppSidebarProps {

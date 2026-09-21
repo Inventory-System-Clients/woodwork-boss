@@ -1,4 +1,4 @@
-export type UserRole = "admin" | "gerente" | "funcionario";
+export type UserRole = "admin" | "funcionario";
 
 export interface AuthUser {
   id: string;
@@ -7,4 +7,4 @@ export interface AuthUser {
   role: UserRole;
 }
 
-export const isManagerRole = (role?: UserRole | null) => role === "admin" || role === "gerente";
+export const isManagerRole = (role?: UserRole | null) => role === "admin";
