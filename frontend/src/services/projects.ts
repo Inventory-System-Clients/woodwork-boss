@@ -66,6 +66,17 @@ export interface ProjectDashboard {
   hoursMonthMinutes: number;
   monthLabel: string;
   topProjects: { id: string; name: string; clientName: string; totalCost: number; totalMinutes: number }[];
+  monthly: ProjectMonthlyPoint[];
+}
+
+export interface ProjectMonthlyPoint {
+  /** YYYY-MM */
+  month: string;
+  expenses: number;
+  commissions: number;
+  profit: number;
+  /** Highest number of projects running on the same day of the month. */
+  peakProjects: number;
 }
 
 export interface CreateProjectCostInput {
@@ -230,6 +241,13 @@ export const getProjectDashboard = async (): Promise<ProjectDashboard> => {
       ...row,
       totalCost: num(row.totalCost),
       totalMinutes: num(row.totalMinutes),
+    })),
+    monthly: (data.monthly ?? []).map((row) => ({
+      month: row.month,
+      expenses: num(row.expenses),
+      commissions: num(row.commissions),
+      profit: num(row.profit),
+      peakProjects: num(row.peakProjects),
     })),
   };
 };

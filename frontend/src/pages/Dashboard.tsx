@@ -1,11 +1,40 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Bar, BarChart, CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { useNavigate } from "react-router-dom";
 import { AlertTriangle, Banknote, Clock, FolderOpen, Hourglass, Wallet } from "lucide-react";
 import { DashboardLayout } from "@/layouts/DashboardLayout";
 import { StatCard } from "@/components/StatCard";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "@/components/ui/chart";
 import { DataTable } from "@/components/DataTable";
 import { formatCurrency, getProjectDashboard, type ProjectDashboard } from "@/services/projects";
 import { formatMinutes } from "@/services/workHours";
+
+const financeChartConfig = {
+  profit: { label: "Lucro", color: "#22c55e" },
+  expenses: { label: "Gastos", color: "#ef4444" },
+  commissions: { label: "Comissão", color: "#0ea5e9" },
+} satisfies ChartConfig;
+
+const peakChartConfig = {
+  peakProjects: { label: "Projetos simultâneos", color: "#f59e0b" },
+} satisfies ChartConfig;
+
+const shortMonth = (month: string) => {
+  const [year, monthNumber] = month.split("-");
+  const label = new Date(Number(year), Number(monthNumber) - 1, 1)
+    .toLocaleDateString("pt-BR", { month: "short" })
+    .replace(".", "");
+
+  return `${label}/${year.slice(2)}`;
+};
 
 const formatMonth = (monthLabel: string) => {
   const [year, month] = monthLabel.split("-");
@@ -38,6 +67,12 @@ const DashboardPage = () => {
   useEffect(() => {
     void load();
   }, []);
+
+  const monthlyRows = useMemo(
+    () => (data?.monthly ?? []).map((point) => ({ ...point, label: shortMonth(point.month) })),
+    [data],
+  );
+  const hasFinanceData = monthlyRows.some((row) => row.expenses || row.commissions || row.profit);
 
   return (
     <DashboardLayout title="Dashboard" subtitle="Visão geral">
@@ -94,6 +129,82 @@ const DashboardPage = () => {
                 subtitle="projetos em andamento"
                 icon={<AlertTriangle className="h-4 w-4" />}
               />
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <Card>
+                <CardHeader className="pb-0">
+                  <CardTitle className="text-sm">Lucro, gastos e comissão por mês</CardTitle>
+                  <CardDescription>
+                    Gastos e comissão pelo mês do lançamento; lucro (valor final − custos − comissões) pelo mês em que o
+                    projeto foi finalizado. Últimos 12 meses.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="pt-4">
+                  {hasFinanceData ? (
+                    <ChartContainer config={financeChartConfig} className="h-[280px] w-full aspect-auto">
+                      <BarChart data={monthlyRows}>
+                        <CartesianGrid vertical={false} />
+                        <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} />
+                        <YAxis
+                          tickLine={false}
+                          axisLine={false}
+                          width={56}
+                          tickFormatter={(value) => `R$ ${Number(value).toLocaleString("pt-BR", { notation: "compact" })}`}
+                        />
+                        <ChartTooltip
+                          content={
+                            <ChartTooltipContent
+                              formatter={(value, name) => (
+                                <div className="flex w-full justify-between gap-4">
+                                  <span className="text-muted-foreground">
+                                    {financeChartConfig[name as keyof typeof financeChartConfig]?.label ?? name}
+                                  </span>
+                                  <span className="font-mono font-medium">{formatCurrency(Number(value))}</span>
+                                </div>
+                              )}
+                            />
+                          }
+                        />
+                        <ChartLegend content={<ChartLegendContent />} />
+                        <Bar dataKey="profit" fill="var(--color-profit)" radius={[3, 3, 0, 0]} />
+                        <Bar dataKey="expenses" fill="var(--color-expenses)" radius={[3, 3, 0, 0]} />
+                        <Bar dataKey="commissions" fill="var(--color-commissions)" radius={[3, 3, 0, 0]} />
+                      </BarChart>
+                    </ChartContainer>
+                  ) : (
+                    <p className="text-sm text-muted-foreground py-6">
+                      Ainda não há custos, comissões ou projetos finalizados nos últimos 12 meses.
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-0">
+                  <CardTitle className="text-sm">Meses com mais projetos simultâneos</CardTitle>
+                  <CardDescription>
+                    Maior quantidade de projetos em andamento ao mesmo tempo em cada mês (do início à finalização).
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="pt-4">
+                  <ChartContainer config={peakChartConfig} className="h-[280px] w-full aspect-auto">
+                    <LineChart data={monthlyRows}>
+                      <CartesianGrid vertical={false} />
+                      <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} />
+                      <YAxis tickLine={false} axisLine={false} width={32} allowDecimals={false} />
+                      <ChartTooltip content={<ChartTooltipContent />} />
+                      <Line
+                        type="monotone"
+                        dataKey="peakProjects"
+                        stroke="var(--color-peakProjects)"
+                        strokeWidth={2}
+                        dot={{ r: 3 }}
+                      />
+                    </LineChart>
+                  </ChartContainer>
+                </CardContent>
+              </Card>
             </div>
 
             <section className="space-y-2">
