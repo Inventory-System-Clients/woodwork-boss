@@ -5,7 +5,7 @@
 export const COMPANY = {
   name: "Mais Quiosque",
   legalName: "",
-  document: "", // CNPJ
+  document: "07.313.928/0001-75", // CNPJ
   phone: "",
   email: "",
   website: "",
