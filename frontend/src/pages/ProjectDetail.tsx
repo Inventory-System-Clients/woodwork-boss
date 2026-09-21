@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Check, Plus, Trash2, Undo2 } from "lucide-react";
+import { ArrowLeft, Check, FileText, ImagePlus, Link2, Plus, Trash2, Undo2 } from "lucide-react";
 import { DashboardLayout } from "@/layouts/DashboardLayout";
 import { DataTable } from "@/components/DataTable";
 import { FormField } from "@/components/FormField";
@@ -23,11 +23,44 @@ import {
   type UpdateProjectInput,
 } from "@/services/projects";
 import { formatMinutes } from "@/services/workHours";
+import { listEmployees, type Employee } from "@/services/employees";
+import { createProductionShareLink, listProductionImages, uploadProductionImages, type ProductionImage } from "@/services/productions";
+import { printProjectReport } from "@/lib/projectReport";
 import { ProjectStatusBadge } from "./Projects";
 
 const todayLocal = () => new Date().toLocaleDateString("en-CA");
 
-const emptyCostForm = { description: "", amount: "", supplier: "", isPaid: "nao", paidAt: todayLocal() };
+const emptyCostForm = {
+  description: "",
+  amount: "",
+  supplier: "",
+  isPaid: "nao",
+  paidAt: todayLocal(),
+  isCommission: "nao",
+  commissionMode: "percent",
+  commissionPercent: "",
+  commissionEmployeeId: "",
+};
+
+const copyText = async (value: string) => {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textArea = document.createElement("textarea");
+  textArea.value = value;
+  textArea.style.position = "fixed";
+  textArea.style.opacity = "0";
+  document.body.appendChild(textArea);
+  textArea.select();
+
+  try {
+    document.execCommand("copy");
+  } finally {
+    document.body.removeChild(textArea);
+  }
+};
 
 interface EditableTextProps {
   label: string;
@@ -103,6 +136,13 @@ const ProjectDetailPage = () => {
   const [isSavingCost, setIsSavingCost] = useState(false);
   const [payingCost, setPayingCost] = useState<ProjectCost | null>(null);
   const [payDate, setPayDate] = useState(todayLocal());
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [updateNote, setUpdateNote] = useState("");
+  const [isSavingNote, setIsSavingNote] = useState(false);
+  const [images, setImages] = useState<ProductionImage[]>([]);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const [isSharing, setIsSharing] = useState(false);
 
   const load = async () => {
     setIsLoading(true);
@@ -121,6 +161,22 @@ const ProjectDetailPage = () => {
     void load();
   }, [id]);
 
+  useEffect(() => {
+    setUpdateNote(project?.lastUpdateNote ?? "");
+  }, [project?.lastUpdateNote]);
+
+  useEffect(() => {
+    void listProductionImages(id).then(setImages).catch(() => setImages([]));
+  }, [id]);
+
+  useEffect(() => {
+    if (isCostModalOpen && employees.length === 0) {
+      void listEmployees()
+        .then((list) => setEmployees(list.filter((employee) => employee.isActive)))
+        .catch(() => setEmployees([]));
+    }
+  }, [isCostModalOpen]);
+
   const notifyError = (title: string, cause: unknown) =>
     toast({
       variant: "destructive",
@@ -137,11 +193,32 @@ const ProjectDetailPage = () => {
     }
   };
 
+  const otherCostsTotal = (project?.costs ?? [])
+    .filter((cost) => !cost.isCommission)
+    .reduce((sum, cost) => sum + cost.amount, 0);
+
   const submitCost = async (event: FormEvent) => {
     event.preventDefault();
-    const amount = Number(costForm.amount.replace(",", "."));
 
-    if (!costForm.description.trim() || !Number.isFinite(amount) || amount < 0 || costForm.amount.trim() === "") {
+    const isCommission = costForm.isCommission === "sim";
+    const isPercent = isCommission && costForm.commissionMode === "percent";
+    const amount = Number(costForm.amount.replace(",", "."));
+    const percent = Number(costForm.commissionPercent.replace(",", "."));
+
+    if (isCommission) {
+      if (!costForm.commissionEmployeeId) {
+        toast({ variant: "destructive", title: "Selecione o funcionário que receberá a comissão." });
+        return;
+      }
+
+      if (isPercent ? !(percent > 0 && percent <= 100) : !(amount > 0)) {
+        toast({
+          variant: "destructive",
+          title: isPercent ? "Informe uma porcentagem entre 0 e 100." : "Informe o valor da comissão.",
+        });
+        return;
+      }
+    } else if (!costForm.description.trim() || !Number.isFinite(amount) || amount < 0 || costForm.amount.trim() === "") {
       toast({ variant: "destructive", title: "Informe o que comprou e um valor válido." });
       return;
     }
@@ -152,11 +229,15 @@ const ProjectDetailPage = () => {
       const isPaid = costForm.isPaid === "sim";
 
       await addProjectCost(id, {
-        description: costForm.description.trim(),
-        amount,
+        description: costForm.description.trim() || undefined,
+        amount: isPercent ? undefined : amount,
         supplier: costForm.supplier.trim() || undefined,
         isPaid,
         paidAt: isPaid ? costForm.paidAt || undefined : undefined,
+        isCommission,
+        commissionMode: isCommission ? (isPercent ? "percent" : "value") : undefined,
+        commissionPercent: isPercent ? percent : undefined,
+        commissionEmployeeId: isCommission ? costForm.commissionEmployeeId : undefined,
       });
 
       setIsCostModalOpen(false);
@@ -166,6 +247,68 @@ const ProjectDetailPage = () => {
       notifyError("Não foi possível adicionar o custo", saveError);
     } finally {
       setIsSavingCost(false);
+    }
+  };
+
+  const saveNote = async () => {
+    setIsSavingNote(true);
+
+    try {
+      setProject(await updateProject(id, { lastUpdateNote: updateNote.trim() || null }));
+      toast({ title: "Atualização salva" });
+    } catch (noteError) {
+      notifyError("Não foi possível salvar a atualização", noteError);
+    } finally {
+      setIsSavingNote(false);
+    }
+  };
+
+  const copyClientLink = async () => {
+    setIsSharing(true);
+
+    try {
+      const link = await createProductionShareLink(id);
+
+      if (!link.url) {
+        throw new Error("A API não retornou a URL de acompanhamento.");
+      }
+
+      await copyText(link.url);
+      toast({
+        title: "Link do cliente copiado",
+        description: link.expiresAt ? `Expira em ${new Date(link.expiresAt).toLocaleString("pt-BR")}.` : undefined,
+      });
+    } catch (shareError) {
+      notifyError("Não foi possível gerar o link", shareError);
+    } finally {
+      setIsSharing(false);
+    }
+  };
+
+  const uploadImages = async () => {
+    if (selectedFiles.length === 0) return;
+
+    setIsUploading(true);
+
+    try {
+      await uploadProductionImages(id, selectedFiles);
+      setSelectedFiles([]);
+      setImages(await listProductionImages(id));
+      toast({ title: "Fotos enviadas" });
+    } catch (uploadError) {
+      notifyError("Não foi possível enviar as fotos", uploadError);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const exportPdf = () => {
+    if (project && !printProjectReport(project)) {
+      toast({
+        variant: "destructive",
+        title: "Não foi possível gerar o PDF",
+        description: "O navegador bloqueou a janela de impressão. Libere pop-ups para este site.",
+      });
     }
   };
 
@@ -206,12 +349,23 @@ const ProjectDetailPage = () => {
   return (
     <DashboardLayout title={project?.name ?? "Projeto"} subtitle="Projetos">
       <div className="animate-fade-in space-y-6">
-        <Link
-          to="/projects"
-          className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" /> Voltar para projetos
-        </Link>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Link
+            to="/projects"
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" /> Voltar para projetos
+          </Link>
+          {project && (
+            <button
+              onClick={exportPdf}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded border border-border hover:bg-secondary transition-colors"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              {project.status === "Finalizado" ? "PDF FINAL DO PROJETO" : "PDF DO PROJETO"}
+            </button>
+          )}
+        </div>
 
         {error && (
           <div className="border border-destructive/40 bg-destructive/10 rounded px-3 py-2 text-sm text-destructive flex items-center justify-between gap-3">
@@ -273,6 +427,77 @@ const ProjectDetailPage = () => {
               <StatCard title="Custo total" value={formatCurrency(project.totals.totalCost)} icon={<Plus className="h-4 w-4" />} highlight />
             </div>
 
+            <section className="border border-border rounded bg-card p-4 sm:p-5 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-[11px] uppercase tracking-widest text-muted-foreground font-bold">
+                  Acompanhamento do cliente
+                </h2>
+                <button
+                  onClick={() => void copyClientLink()}
+                  disabled={isSharing}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded border border-border hover:bg-secondary disabled:opacity-60"
+                >
+                  <Link2 className="h-3.5 w-3.5" /> {isSharing ? "GERANDO..." : "COPIAR LINK DO CLIENTE"}
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                O cliente vê o status, o prazo, as fotos e a última atualização, sem nenhum valor financeiro.
+              </p>
+
+              <div className="space-y-2">
+                <FormField
+                  label="Descrição da última atualização"
+                  as="textarea"
+                  value={updateNote}
+                  onChange={(event) => setUpdateNote(event.target.value)}
+                  placeholder="Ex.: Corte finalizado, montagem começa na segunda."
+                />
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => void saveNote()}
+                    disabled={isSavingNote || updateNote.trim() === (project.lastUpdateNote ?? "")}
+                    className="px-3 py-2 text-xs font-bold rounded bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-60"
+                  >
+                    {isSavingNote ? "SALVANDO..." : "SALVAR ATUALIZAÇÃO"}
+                  </button>
+                  {project.lastUpdateAt && (
+                    <span className="text-xs text-muted-foreground">
+                      Publicada em {new Date(project.lastUpdateAt).toLocaleString("pt-BR")}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">
+                  Fotos do projeto ({images.length})
+                </p>
+                {images.length > 0 && (
+                  <ul className="text-xs text-foreground/80 space-y-0.5">
+                    {images.map((image) => (
+                      <li key={image.id}>{image.fileName}</li>
+                    ))}
+                  </ul>
+                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={(event) => setSelectedFiles(Array.from(event.target.files ?? []))}
+                    className="text-xs"
+                  />
+                  <button
+                    onClick={() => void uploadImages()}
+                    disabled={isUploading || selectedFiles.length === 0}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded border border-border hover:bg-secondary disabled:opacity-60"
+                  >
+                    <ImagePlus className="h-3.5 w-3.5" /> {isUploading ? "ENVIANDO..." : "ENVIAR FOTOS"}
+                  </button>
+                </div>
+              </div>
+            </section>
+
             <section className="space-y-2">
               <div className="flex items-baseline justify-between gap-3">
                 <h2 className="text-[11px] uppercase tracking-widest text-muted-foreground font-bold">
@@ -305,7 +530,21 @@ const ProjectDetailPage = () => {
                 data={project.costs}
                 emptyMessage="Nenhum custo lançado. Use “Adicionar custo”."
                 columns={[
-                  { key: "description", header: "O que comprou?" },
+                  {
+                    key: "description",
+                    header: "O que comprou?",
+                    render: (cost) => (
+                      <span>
+                        {cost.description}
+                        {cost.isCommission && (
+                          <span className="ml-2 px-1.5 py-0.5 rounded bg-primary/20 text-primary text-[10px] font-bold uppercase">
+                            Comissão{cost.commissionEmployeeName ? ` · ${cost.commissionEmployeeName}` : ""}
+                            {cost.commissionPercent !== null ? ` · ${cost.commissionPercent}%` : ""}
+                          </span>
+                        )}
+                      </span>
+                    ),
+                  },
                   { key: "supplier", header: "Fornecedor", render: (cost) => cost.supplier || "—" },
                   { key: "amount", header: "Valor", mono: true, render: (cost) => formatCurrency(cost.amount) },
                   {
@@ -361,22 +600,87 @@ const ProjectDetailPage = () => {
       <Modal open={isCostModalOpen} onClose={() => setIsCostModalOpen(false)} title="Adicionar custo">
         <form onSubmit={submitCost} className="space-y-4">
           <FormField
-            label="O que comprou?"
-            value={costForm.description}
-            onChange={(event) => setCostForm((current) => ({ ...current, description: event.target.value }))}
-            placeholder="Ex.: MDF branco 18mm"
-            autoFocus
+            label="É comissão?"
+            as="select"
+            value={costForm.isCommission}
+            onChange={(event) => setCostForm((current) => ({ ...current, isCommission: event.target.value || "nao" }))}
+            options={[
+              { value: "nao", label: "Não" },
+              { value: "sim", label: "Sim" },
+            ]}
           />
-          <FormField
-            label="Valor (R$)"
-            type="number"
-            inputMode="decimal"
-            min={0}
-            step="0.01"
-            value={costForm.amount}
-            onChange={(event) => setCostForm((current) => ({ ...current, amount: event.target.value }))}
-            placeholder="2500"
-          />
+          {costForm.isCommission === "sim" && (
+            <div className="space-y-4 border border-border rounded p-3 bg-secondary/20">
+              <FormField
+                label="Funcionário que receberá"
+                as="select"
+                value={costForm.commissionEmployeeId}
+                onChange={(event) => setCostForm((current) => ({ ...current, commissionEmployeeId: event.target.value }))}
+                options={employees.map((employee) => ({ value: employee.id, label: employee.name }))}
+              />
+              <FormField
+                label="Comissão em"
+                as="select"
+                value={costForm.commissionMode}
+                onChange={(event) => setCostForm((current) => ({ ...current, commissionMode: event.target.value || "percent" }))}
+                options={[
+                  { value: "percent", label: "Porcentagem (%)" },
+                  { value: "value", label: "Valor (R$)" },
+                ]}
+              />
+              {costForm.commissionMode === "percent" ? (
+                <>
+                  <FormField
+                    label="Porcentagem (%)"
+                    type="number"
+                    inputMode="decimal"
+                    min={0}
+                    max={100}
+                    step="0.01"
+                    value={costForm.commissionPercent}
+                    onChange={(event) => setCostForm((current) => ({ ...current, commissionPercent: event.target.value }))}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Calculada sobre os demais custos do projeto ({formatCurrency(otherCostsTotal)})
+                    {Number(costForm.commissionPercent) > 0 &&
+                      ` = ${formatCurrency((otherCostsTotal * Number(costForm.commissionPercent)) / 100)}`}
+                    . O valor fica registrado no momento do lançamento.
+                  </p>
+                </>
+              ) : (
+                <FormField
+                  label="Valor da comissão (R$)"
+                  type="number"
+                  inputMode="decimal"
+                  min={0}
+                  step="0.01"
+                  value={costForm.amount}
+                  onChange={(event) => setCostForm((current) => ({ ...current, amount: event.target.value }))}
+                />
+              )}
+            </div>
+          )}
+          {costForm.isCommission !== "sim" && (
+            <>
+              <FormField
+                label="O que comprou?"
+                value={costForm.description}
+                onChange={(event) => setCostForm((current) => ({ ...current, description: event.target.value }))}
+                placeholder="Ex.: MDF branco 18mm"
+                autoFocus
+              />
+              <FormField
+                label="Valor (R$)"
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step="0.01"
+                value={costForm.amount}
+                onChange={(event) => setCostForm((current) => ({ ...current, amount: event.target.value }))}
+                placeholder="2500"
+              />
+            </>
+          )}
           <FormField
             label="Fornecedor (opcional)"
             value={costForm.supplier}

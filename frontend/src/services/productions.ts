@@ -58,6 +58,8 @@ export interface SharedProductionImage extends Omit<ProductionImage, "production
 
 export interface SharedProductionSnapshot extends EmployeeProduction {
   observations: string;
+  projectStatus: string;
+  lastUpdateAt: string;
   updatedAt: string;
   images: SharedProductionImage[];
 }
@@ -821,7 +823,9 @@ const mapSharedProduction = (value: unknown, token: string): SharedProductionSna
 
   return {
     ...production,
-    observations: toStringSafe(item.observations ?? item.notes ?? item.note ?? item.description, "").trim(),
+    observations: toStringSafe(item.observations ?? item.notes ?? item.note, "").trim(),
+    projectStatus: toStringSafe(item.projectStatus, "").trim(),
+    lastUpdateAt: toStringSafe(item.lastUpdateAt, "").trim(),
     updatedAt: toStringSafe(item.updatedAt ?? item.updated_at, ""),
     images,
   };

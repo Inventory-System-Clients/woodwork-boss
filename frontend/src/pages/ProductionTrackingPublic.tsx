@@ -379,7 +379,14 @@ const ProductionTrackingPublicPage = () => {
                   <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Cliente</p>
                   <p className="text-base sm:text-lg font-semibold text-foreground">{data.clientName}</p>
                 </div>
-                <StatusBadge status={data.productionStatus} />
+                <div className="flex flex-col items-end gap-1">
+                  {data.projectStatus && (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider bg-primary/20 text-primary">
+                      {data.projectStatus}
+                    </span>
+                  )}
+                  <StatusBadge status={data.productionStatus} />
+                </div>
               </div>
 
               <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
@@ -422,9 +429,14 @@ const ProductionTrackingPublicPage = () => {
             </div>
 
             <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
-              <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Observacoes</p>
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Ultima atualizacao</p>
+                {data.lastUpdateAt && (
+                  <p className="text-xs text-muted-foreground">{formatDateTime(data.lastUpdateAt)}</p>
+                )}
+              </div>
               <p className="mt-2 text-sm leading-relaxed text-foreground/90 whitespace-pre-wrap">
-                {data.observations || "Sem observacoes registradas ate o momento."}
+                {data.observations || "Nenhuma atualizacao registrada ate o momento."}
               </p>
             </div>
 

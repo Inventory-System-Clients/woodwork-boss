@@ -28,6 +28,10 @@ export interface ProjectCost {
   isPaid: boolean;
   paidAt: string | null;
   createdAt: string;
+  isCommission: boolean;
+  commissionEmployeeId: string | null;
+  commissionEmployeeName: string | null;
+  commissionPercent: number | null;
 }
 
 export interface ProjectHoursByEmployee {
@@ -42,6 +46,8 @@ export interface ProjectDetail {
   clientName: string;
   deadline: string | null;
   status: ProjectStatus;
+  lastUpdateNote: string | null;
+  lastUpdateAt: string | null;
   totals: ProjectTotals;
   totalMinutes: number;
   hoursByEmployee: ProjectHoursByEmployee[];
@@ -59,11 +65,16 @@ export interface ProjectDashboard {
 }
 
 export interface CreateProjectCostInput {
-  description: string;
-  amount: number;
+  description?: string;
+  amount?: number;
   supplier?: string;
   isPaid: boolean;
   paidAt?: string;
+  isCommission?: boolean;
+  /** Percentage of the project's other costs, or a fixed value (uses amount). */
+  commissionMode?: "percent" | "value";
+  commissionPercent?: number;
+  commissionEmployeeId?: string;
 }
 
 export interface UpdateProjectInput {
@@ -71,6 +82,7 @@ export interface UpdateProjectInput {
   clientName?: string;
   deadline?: string | null;
   status?: ProjectStatus;
+  lastUpdateNote?: string | null;
 }
 
 export const formatCurrency = (value: number) =>
@@ -117,11 +129,20 @@ const mapListItem = (item: ProjectListItem): ProjectListItem => ({
   totalCost: item.totalCost === undefined || item.totalCost === null ? null : num(item.totalCost),
 });
 
-const mapCost = (item: ProjectCost): ProjectCost => ({ ...item, amount: num(item.amount) });
+const mapCost = (item: ProjectCost): ProjectCost => ({
+  ...item,
+  amount: num(item.amount),
+  isCommission: Boolean(item.isCommission),
+  commissionEmployeeId: item.commissionEmployeeId ?? null,
+  commissionEmployeeName: item.commissionEmployeeName ?? null,
+  commissionPercent: item.commissionPercent === null || item.commissionPercent === undefined ? null : num(item.commissionPercent),
+});
 
 const mapDetail = (item: ProjectDetail): ProjectDetail => ({
   ...item,
   status: normalizeStatus(item.status),
+  lastUpdateNote: item.lastUpdateNote ?? null,
+  lastUpdateAt: item.lastUpdateAt ?? null,
   totals: mapTotals(item.totals),
   totalMinutes: num(item.totalMinutes),
   hoursByEmployee: (item.hoursByEmployee ?? []).map((row) => ({ ...row, minutes: num(row.minutes) })),
