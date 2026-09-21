@@ -48,6 +48,10 @@ export interface ProjectDetail {
   status: ProjectStatus;
   lastUpdateNote: string | null;
   lastUpdateAt: string | null;
+  laborValue: number;
+  discountValue: number;
+  createdAt: string | null;
+  finishedAt: string | null;
   totals: ProjectTotals;
   totalMinutes: number;
   hoursByEmployee: ProjectHoursByEmployee[];
@@ -83,6 +87,8 @@ export interface UpdateProjectInput {
   deadline?: string | null;
   status?: ProjectStatus;
   lastUpdateNote?: string | null;
+  laborValue?: number;
+  discountValue?: number;
 }
 
 export const formatCurrency = (value: number) =>
@@ -143,6 +149,10 @@ const mapDetail = (item: ProjectDetail): ProjectDetail => ({
   status: normalizeStatus(item.status),
   lastUpdateNote: item.lastUpdateNote ?? null,
   lastUpdateAt: item.lastUpdateAt ?? null,
+  laborValue: num(item.laborValue),
+  discountValue: num(item.discountValue),
+  createdAt: item.createdAt ?? null,
+  finishedAt: item.finishedAt ?? null,
   totals: mapTotals(item.totals),
   totalMinutes: num(item.totalMinutes),
   hoursByEmployee: (item.hoursByEmployee ?? []).map((row) => ({ ...row, minutes: num(row.minutes) })),

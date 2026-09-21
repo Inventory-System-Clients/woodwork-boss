@@ -26,6 +26,8 @@ import { formatMinutes } from "@/services/workHours";
 import { listEmployees, type Employee } from "@/services/employees";
 import { createProductionShareLink, listProductionImages, uploadProductionImages, type ProductionImage } from "@/services/productions";
 import { printProjectReport } from "@/lib/projectReport";
+import { calculateDeliveryTotals, printDeliveryReport } from "@/lib/deliveryReport";
+import { listClients } from "@/services/clients";
 import { ProjectStatusBadge } from "./Projects";
 
 const todayLocal = () => new Date().toLocaleDateString("en-CA");
@@ -143,6 +145,8 @@ const ProjectDetailPage = () => {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
+  const [deliveryValues, setDeliveryValues] = useState({ labor: "", discount: "" });
+  const [isSavingDelivery, setIsSavingDelivery] = useState(false);
 
   const load = async () => {
     setIsLoading(true);
@@ -164,6 +168,13 @@ const ProjectDetailPage = () => {
   useEffect(() => {
     setUpdateNote(project?.lastUpdateNote ?? "");
   }, [project?.lastUpdateNote]);
+
+  useEffect(() => {
+    setDeliveryValues({
+      labor: project ? String(project.laborValue) : "",
+      discount: project ? String(project.discountValue) : "",
+    });
+  }, [project?.laborValue, project?.discountValue]);
 
   useEffect(() => {
     void listProductionImages(id).then(setImages).catch(() => setImages([]));
@@ -302,6 +313,44 @@ const ProjectDetailPage = () => {
     }
   };
 
+  const saveDeliveryValues = async () => {
+    const labor = Number(deliveryValues.labor.replace(",", ".") || 0);
+    const discount = Number(deliveryValues.discount.replace(",", ".") || 0);
+
+    if (!Number.isFinite(labor) || !Number.isFinite(discount) || labor < 0 || discount < 0) {
+      toast({ variant: "destructive", title: "Informe valores válidos (não negativos)." });
+      return;
+    }
+
+    setIsSavingDelivery(true);
+
+    try {
+      setProject(await updateProject(id, { laborValue: labor, discountValue: discount }));
+      toast({ title: "Valores de entrega salvos" });
+    } catch (saveError) {
+      notifyError("Não foi possível salvar os valores", saveError);
+    } finally {
+      setIsSavingDelivery(false);
+    }
+  };
+
+  const exportDeliveryPdf = async () => {
+    if (!project) return;
+
+    // Client registration data (document, phone, address) is matched by name; the PDF still works without it.
+    const clients = await listClients().catch(() => []);
+    const wanted = project.clientName.trim().toLowerCase();
+    const client = clients.find((item) => item.name.trim().toLowerCase() === wanted) ?? null;
+
+    if (!printDeliveryReport(project, client)) {
+      toast({
+        variant: "destructive",
+        title: "Não foi possível gerar o PDF",
+        description: "O navegador bloqueou a janela de impressão. Libere pop-ups para este site.",
+      });
+    }
+  };
+
   const exportPdf = () => {
     if (project && !printProjectReport(project)) {
       toast({
@@ -362,7 +411,16 @@ const ProjectDetailPage = () => {
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded border border-border hover:bg-secondary transition-colors"
             >
               <FileText className="h-3.5 w-3.5" />
-              {project.status === "Finalizado" ? "PDF FINAL DO PROJETO" : "PDF DO PROJETO"}
+              {project.status === "Finalizado" ? "PDF FINAL (INTERNO)" : "PDF DO PROJETO (INTERNO)"}
+            </button>
+          )}
+          {project && (
+            <button
+              onClick={() => void exportDeliveryPdf()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              {project.status === "Finalizado" ? "PDF DE ENTREGA AO CLIENTE" : "PDF AO CLIENTE (PRÉVIA)"}
             </button>
           )}
         </div>
@@ -426,94 +484,6 @@ const ProjectDetailPage = () => {
               <StatCard title="Total a pagar" value={formatCurrency(project.totals.totalToPay)} icon={<Undo2 className="h-4 w-4" />} />
               <StatCard title="Custo total" value={formatCurrency(project.totals.totalCost)} icon={<Plus className="h-4 w-4" />} highlight />
             </div>
-
-            <section className="border border-border rounded bg-card p-4 sm:p-5 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h2 className="text-[11px] uppercase tracking-widest text-muted-foreground font-bold">
-                  Acompanhamento do cliente
-                </h2>
-                <button
-                  onClick={() => void copyClientLink()}
-                  disabled={isSharing}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded border border-border hover:bg-secondary disabled:opacity-60"
-                >
-                  <Link2 className="h-3.5 w-3.5" /> {isSharing ? "GERANDO..." : "COPIAR LINK DO CLIENTE"}
-                </button>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                O cliente vê o status, o prazo, as fotos e a última atualização, sem nenhum valor financeiro.
-              </p>
-
-              <div className="space-y-2">
-                <FormField
-                  label="Descrição da última atualização"
-                  as="textarea"
-                  value={updateNote}
-                  onChange={(event) => setUpdateNote(event.target.value)}
-                  placeholder="Ex.: Corte finalizado, montagem começa na segunda."
-                />
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => void saveNote()}
-                    disabled={isSavingNote || updateNote.trim() === (project.lastUpdateNote ?? "")}
-                    className="px-3 py-2 text-xs font-bold rounded bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-60"
-                  >
-                    {isSavingNote ? "SALVANDO..." : "SALVAR ATUALIZAÇÃO"}
-                  </button>
-                  {project.lastUpdateAt && (
-                    <span className="text-xs text-muted-foreground">
-                      Publicada em {new Date(project.lastUpdateAt).toLocaleString("pt-BR")}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">
-                  Fotos do projeto ({images.length})
-                </p>
-                {images.length > 0 && (
-                  <ul className="text-xs text-foreground/80 space-y-0.5">
-                    {images.map((image) => (
-                      <li key={image.id}>{image.fileName}</li>
-                    ))}
-                  </ul>
-                )}
-                <div className="flex flex-wrap items-center gap-2">
-                  <input
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    onChange={(event) => setSelectedFiles(Array.from(event.target.files ?? []))}
-                    className="text-xs"
-                  />
-                  <button
-                    onClick={() => void uploadImages()}
-                    disabled={isUploading || selectedFiles.length === 0}
-                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded border border-border hover:bg-secondary disabled:opacity-60"
-                  >
-                    <ImagePlus className="h-3.5 w-3.5" /> {isUploading ? "ENVIANDO..." : "ENVIAR FOTOS"}
-                  </button>
-                </div>
-              </div>
-            </section>
-
-            <section className="space-y-2">
-              <div className="flex items-baseline justify-between gap-3">
-                <h2 className="text-[11px] uppercase tracking-widest text-muted-foreground font-bold">
-                  Horas trabalhadas
-                </h2>
-                <span className="font-mono text-sm font-bold text-primary">{formatMinutes(project.totalMinutes)}</span>
-              </div>
-              <DataTable
-                data={project.hoursByEmployee.map((row) => ({ ...row, id: row.employeeId }))}
-                emptyMessage="Nenhuma hora lançada neste projeto."
-                columns={[
-                  { key: "employeeName", header: "Funcionário" },
-                  { key: "minutes", header: "Horas", mono: true, render: (row) => formatMinutes(row.minutes) },
-                ]}
-              />
-            </section>
 
             <section className="space-y-2">
               <div className="flex items-center justify-between gap-3">
@@ -592,6 +562,133 @@ const ProjectDetailPage = () => {
                   },
                 ]}
               />
+            </section>
+
+            <section className="border border-border rounded bg-card p-4 sm:p-5 space-y-3">
+              <h2 className="text-[11px] uppercase tracking-widest text-muted-foreground font-bold">
+                Valores do PDF de entrega ao cliente
+              </h2>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                <FormField
+                  label="Mão de obra (R$)"
+                  type="number"
+                  inputMode="decimal"
+                  min={0}
+                  step="0.01"
+                  value={deliveryValues.labor}
+                  onChange={(event) => setDeliveryValues((current) => ({ ...current, labor: event.target.value }))}
+                />
+                <FormField
+                  label="Desconto (R$)"
+                  type="number"
+                  inputMode="decimal"
+                  min={0}
+                  step="0.01"
+                  value={deliveryValues.discount}
+                  onChange={(event) => setDeliveryValues((current) => ({ ...current, discount: event.target.value }))}
+                />
+                <button
+                  onClick={() => void saveDeliveryValues()}
+                  disabled={isSavingDelivery}
+                  className="px-3 py-2 text-xs font-bold rounded bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-60"
+                >
+                  {isSavingDelivery ? "SALVANDO..." : "SALVAR VALORES"}
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Valor final ao cliente (itens sem comissões + mão de obra − desconto):{" "}
+                <span className="font-mono font-bold text-foreground">
+                  {formatCurrency(calculateDeliveryTotals(project).total)}
+                </span>
+              </p>
+            </section>
+
+            <section className="space-y-2">
+              <div className="flex items-baseline justify-between gap-3">
+                <h2 className="text-[11px] uppercase tracking-widest text-muted-foreground font-bold">
+                  Horas trabalhadas
+                </h2>
+                <span className="font-mono text-sm font-bold text-primary">{formatMinutes(project.totalMinutes)}</span>
+              </div>
+              <DataTable
+                data={project.hoursByEmployee.map((row) => ({ ...row, id: row.employeeId }))}
+                emptyMessage="Nenhuma hora lançada neste projeto."
+                columns={[
+                  { key: "employeeName", header: "Funcionário" },
+                  { key: "minutes", header: "Horas", mono: true, render: (row) => formatMinutes(row.minutes) },
+                ]}
+              />
+            </section>
+
+            <section className="border border-border rounded bg-card p-4 sm:p-5 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-[11px] uppercase tracking-widest text-muted-foreground font-bold">
+                  Acompanhamento do cliente
+                </h2>
+                <button
+                  onClick={() => void copyClientLink()}
+                  disabled={isSharing}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded border border-border hover:bg-secondary disabled:opacity-60"
+                >
+                  <Link2 className="h-3.5 w-3.5" /> {isSharing ? "GERANDO..." : "COPIAR LINK DO CLIENTE"}
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                O cliente vê o status, o prazo, as fotos e a última atualização, sem nenhum valor financeiro.
+              </p>
+
+              <div className="space-y-2">
+                <FormField
+                  label="Descrição da última atualização"
+                  as="textarea"
+                  value={updateNote}
+                  onChange={(event) => setUpdateNote(event.target.value)}
+                  placeholder="Ex.: Corte finalizado, montagem começa na segunda."
+                />
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => void saveNote()}
+                    disabled={isSavingNote || updateNote.trim() === (project.lastUpdateNote ?? "")}
+                    className="px-3 py-2 text-xs font-bold rounded bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-60"
+                  >
+                    {isSavingNote ? "SALVANDO..." : "SALVAR ATUALIZAÇÃO"}
+                  </button>
+                  {project.lastUpdateAt && (
+                    <span className="text-xs text-muted-foreground">
+                      Publicada em {new Date(project.lastUpdateAt).toLocaleString("pt-BR")}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">
+                  Fotos do projeto ({images.length})
+                </p>
+                {images.length > 0 && (
+                  <ul className="text-xs text-foreground/80 space-y-0.5">
+                    {images.map((image) => (
+                      <li key={image.id}>{image.fileName}</li>
+                    ))}
+                  </ul>
+                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={(event) => setSelectedFiles(Array.from(event.target.files ?? []))}
+                    className="text-xs"
+                  />
+                  <button
+                    onClick={() => void uploadImages()}
+                    disabled={isUploading || selectedFiles.length === 0}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded border border-border hover:bg-secondary disabled:opacity-60"
+                  >
+                    <ImagePlus className="h-3.5 w-3.5" /> {isUploading ? "ENVIANDO..." : "ENVIAR FOTOS"}
+                  </button>
+                </div>
+              </div>
             </section>
           </>
         )}
