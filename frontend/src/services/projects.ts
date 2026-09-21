@@ -187,6 +187,7 @@ export const createProject = async (input: {
   name: string;
   clientName: string;
   clientDocument: string;
+  deadline?: string;
   status: ProjectStatus;
 }) =>
   mapDetail(

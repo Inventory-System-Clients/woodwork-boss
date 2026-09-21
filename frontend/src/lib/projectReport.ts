@@ -43,7 +43,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px
 .total td{font-weight:bold}.muted{color:#666;font-size:12px}.final{font-size:16px}.badge{display:inline-block;padding:2px 8px;border-radius:4px;background:#eee;font-size:11px;font-weight:bold}</style></head><body>
 <h1>${isFinal ? "Relatório final do projeto" : "Relatório do projeto (parcial)"}</h1>
 <p class="muted">${escapeHtml(project.clientName)} - ${escapeHtml(project.name)}<br>
-Status: <span class="badge">${escapeHtml(project.status)}</span><br>
+Status: <span class="badge">${escapeHtml(project.status)}</span> &nbsp; Prazo: ${formatDateOnly(project.deadline)}<br>
 Gerado em ${new Date().toLocaleString("pt-BR")}</p>
 ${
   project.lastUpdateNote

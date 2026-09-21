@@ -30,7 +30,7 @@ export const ProjectStatusBadge = ({ status }: { status: ProjectStatus }) => (
   </span>
 );
 
-const emptyForm = { name: "", clientName: "", clientDocument: "", status: "Em andamento" as ProjectStatus };
+const emptyForm = { name: "", clientName: "", clientDocument: "", deadline: "", status: "Em andamento" as ProjectStatus };
 
 const isValidDocument = (value: string) => [11, 14].includes(value.replace(/\D/g, "").length);
 
@@ -80,6 +80,7 @@ const ProjectsPage = () => {
         name: form.name.trim(),
         clientName: form.clientName.trim(),
         clientDocument: form.clientDocument.trim(),
+        deadline: form.deadline || undefined,
         status: form.status,
       });
 
@@ -127,6 +128,7 @@ const ProjectsPage = () => {
             columns={[
               { key: "name", header: "Projeto" },
               { key: "clientName", header: "Cliente" },
+              { key: "deadline", header: "Prazo", render: (project) => formatDateOnly(project.deadline) },
               { key: "status", header: "Status", render: (project) => <ProjectStatusBadge status={project.status} /> },
               {
                 key: "totalCost",
@@ -160,6 +162,12 @@ const ProjectsPage = () => {
             onChange={(event) => setForm((current) => ({ ...current, clientDocument: event.target.value }))}
             placeholder="000.000.000-00 ou 00.000.000/0000-00"
             inputMode="numeric"
+          />
+          <FormField
+            label="Prazo de entrega (opcional)"
+            type="date"
+            value={form.deadline}
+            onChange={(event) => setForm((current) => ({ ...current, deadline: event.target.value }))}
           />
           <FormField
             label="Status"

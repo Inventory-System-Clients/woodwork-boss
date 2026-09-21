@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { useNavigate } from "react-router-dom";
-import { Banknote, Clock, FolderOpen, Hourglass, Wallet } from "lucide-react";
+import { AlertTriangle, Banknote, Clock, FolderOpen, Hourglass, Wallet } from "lucide-react";
 import { DashboardLayout } from "@/layouts/DashboardLayout";
 import { StatCard } from "@/components/StatCard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -122,6 +122,12 @@ const DashboardPage = () => {
                 value={formatMinutes(data.hoursMonthMinutes)}
                 subtitle={formatMonth(data.monthLabel)}
                 icon={<Clock className="h-4 w-4" />}
+              />
+              <StatCard
+                title="Prazo vencido"
+                value={data.overdueProjects}
+                subtitle="projetos em andamento"
+                icon={<AlertTriangle className="h-4 w-4" />}
               />
             </div>
 
