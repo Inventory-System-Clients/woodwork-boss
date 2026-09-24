@@ -191,3 +191,18 @@ export const getEmployeeWorkHours = async (
     entries: mapEntries(data.entries),
   };
 };
+
+/** Admin only: corrects the minutes of a single logged line. */
+export const updateWorkHoursEntry = async (entryId: string, minutes: number) => {
+  await request<unknown>(`/work-hours/${encodeURIComponent(entryId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ minutes }),
+  });
+};
+
+/** Admin only: removes a single logged line. */
+export const deleteWorkHoursEntry = async (entryId: string) => {
+  await request<unknown>(`/work-hours/${encodeURIComponent(entryId)}`, {
+    method: "DELETE",
+  });
+};

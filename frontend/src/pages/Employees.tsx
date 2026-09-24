@@ -16,10 +16,12 @@ import {
 import { EmployeeProduction, listProductionsByEmployee } from "@/services/productions";
 import {
   EmployeeWorkHoursReport,
+  deleteWorkHoursEntry,
   formatMinutes,
   getEmployeeWorkHours,
+  updateWorkHoursEntry,
 } from "@/services/workHours";
-import { ClipboardList, Clock, Pencil, Plus, Trash2 } from "lucide-react";
+import { Check, ClipboardList, Clock, Pencil, Plus, Trash2, X } from "lucide-react";
 
 interface EmployeeFormState {
   name: string;
@@ -82,6 +84,8 @@ const EmployeesPage = () => {
   const [hoursReport, setHoursReport] = useState<EmployeeWorkHoursReport | null>(null);
   const [isLoadingHours, setIsLoadingHours] = useState(false);
   const [hoursError, setHoursError] = useState("");
+  const [editingEntry, setEditingEntry] = useState<{ id: string; hours: string; minutes: string } | null>(null);
+  const [busyEntryId, setBusyEntryId] = useState<string | null>(null);
 
   const [data, setData] = useState<Employee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -197,7 +201,72 @@ const EmployeesPage = () => {
     setHoursFrom(from);
     setHoursTo(to);
     setHoursReport(null);
+    setEditingEntry(null);
     void loadHours(employee, from, to);
+  };
+
+  const startEditEntry = (entry: EmployeeWorkHoursReport["entries"][number]) => {
+    setHoursError("");
+    setEditingEntry({
+      id: entry.id,
+      hours: String(Math.floor(entry.minutes / 60)),
+      minutes: String(entry.minutes % 60),
+    });
+  };
+
+  const saveEntry = async () => {
+    if (!editingEntry || !hoursEmployee) {
+      return;
+    }
+
+    const hours = Number(editingEntry.hours || 0);
+    const minutes = Number(editingEntry.minutes || 0);
+
+    if (!Number.isInteger(hours) || !Number.isInteger(minutes) || hours < 0 || minutes < 0 || minutes > 59) {
+      setHoursError("Informe horas e minutos válidos (minutos entre 0 e 59).");
+      return;
+    }
+
+    const total = hours * 60 + minutes;
+
+    if (total <= 0) {
+      setHoursError("O tempo deve ser maior que zero. Para remover o registro, use excluir.");
+      return;
+    }
+
+    setBusyEntryId(editingEntry.id);
+    setHoursError("");
+
+    try {
+      await updateWorkHoursEntry(editingEntry.id, total);
+      setEditingEntry(null);
+      await loadHours(hoursEmployee, hoursFrom, hoursTo);
+    } catch (error) {
+      setHoursError(error instanceof Error ? error.message : "Falha ao salvar o registro de horas.");
+    } finally {
+      setBusyEntryId(null);
+    }
+  };
+
+  const removeEntry = async (entryId: string) => {
+    if (!hoursEmployee || !window.confirm("Deseja excluir este registro de horas?")) {
+      return;
+    }
+
+    setBusyEntryId(entryId);
+    setHoursError("");
+
+    try {
+      await deleteWorkHoursEntry(entryId);
+      if (editingEntry?.id === entryId) {
+        setEditingEntry(null);
+      }
+      await loadHours(hoursEmployee, hoursFrom, hoursTo);
+    } catch (error) {
+      setHoursError(error instanceof Error ? error.message : "Falha ao excluir o registro de horas.");
+    } finally {
+      setBusyEntryId(null);
+    }
   };
 
   const hoursByDay = useMemo(() => {
@@ -656,12 +725,84 @@ const EmployeesPage = () => {
                       <span className="font-mono">{formatMinutes(info.total)}</span>
                     </div>
                     <div className="divide-y divide-border/50">
-                      {info.entries.map((entry) => (
-                        <div key={entry.id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
-                          <span>{entry.productionLabel || "Produção excluída"}</span>
-                          <span className="font-mono text-xs">{formatMinutes(entry.minutes)}</span>
-                        </div>
-                      ))}
+                      {info.entries.map((entry) => {
+                        const isEditing = editingEntry?.id === entry.id;
+                        const isBusy = busyEntryId === entry.id;
+
+                        return (
+                          <div key={entry.id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                            <span>
+                              {entry.productionId ? entry.productionLabel || "Produção excluída" : entry.activity || "Outra atividade"}
+                            </span>
+                            <div className="flex items-center gap-2">
+                              {isEditing ? (
+                                <>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    max={8}
+                                    value={editingEntry.hours}
+                                    onChange={(event) =>
+                                      setEditingEntry((current) => current && { ...current, hours: event.target.value })
+                                    }
+                                    className="w-14 px-2 py-1 bg-secondary/50 border border-border rounded text-xs font-mono"
+                                    aria-label="Horas"
+                                  />
+                                  <span className="text-xs text-muted-foreground">h</span>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    max={59}
+                                    value={editingEntry.minutes}
+                                    onChange={(event) =>
+                                      setEditingEntry((current) => current && { ...current, minutes: event.target.value })
+                                    }
+                                    className="w-14 px-2 py-1 bg-secondary/50 border border-border rounded text-xs font-mono"
+                                    aria-label="Minutos"
+                                  />
+                                  <span className="text-xs text-muted-foreground">min</span>
+                                  <button
+                                    onClick={() => void saveEntry()}
+                                    disabled={isBusy}
+                                    className="p-1 hover:bg-success/20 rounded text-muted-foreground hover:text-success disabled:opacity-50"
+                                    title="Salvar"
+                                  >
+                                    <Check className="h-3.5 w-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => setEditingEntry(null)}
+                                    disabled={isBusy}
+                                    className="p-1 hover:bg-secondary rounded text-muted-foreground hover:text-foreground disabled:opacity-50"
+                                    title="Cancelar"
+                                  >
+                                    <X className="h-3.5 w-3.5" />
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <span className="font-mono text-xs">{formatMinutes(entry.minutes)}</span>
+                                  <button
+                                    onClick={() => startEditEntry(entry)}
+                                    disabled={isBusy}
+                                    className="p-1 hover:bg-secondary rounded text-muted-foreground hover:text-foreground disabled:opacity-50"
+                                    title="Editar registro"
+                                  >
+                                    <Pencil className="h-3.5 w-3.5" />
+                                  </button>
+                                </>
+                              )}
+                              <button
+                                onClick={() => void removeEntry(entry.id)}
+                                disabled={isBusy}
+                                className="p-1 hover:bg-destructive/20 rounded text-muted-foreground hover:text-destructive disabled:opacity-50 disabled:cursor-not-allowed"
+                                title="Excluir registro"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 ))
