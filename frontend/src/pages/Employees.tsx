@@ -740,7 +740,7 @@ const EmployeesPage = () => {
                                   <input
                                     type="number"
                                     min={0}
-                                    max={8}
+                                    max={9}
                                     value={editingEntry.hours}
                                     onChange={(event) =>
                                       setEditingEntry((current) => current && { ...current, hours: event.target.value })

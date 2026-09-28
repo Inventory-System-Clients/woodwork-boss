@@ -25,7 +25,7 @@ const inputClass =
   "block w-full rounded border border-border bg-background px-3 py-2 text-base text-foreground focus:outline-none focus:ring-1 focus:ring-ring";
 
 // Limit for the whole day, summing every project and activity.
-const MAX_DAY_MINUTES = 8 * 60;
+const MAX_DAY_MINUTES = 9 * 60;
 
 let keyCounter = 0;
 const nextKey = () => `row-${(keyCounter += 1)}`;
@@ -182,7 +182,7 @@ const WorkHoursPage = () => {
     if (totalMinutes > MAX_DAY_MINUTES) {
       toast({
         variant: "destructive",
-        title: "O total do dia não pode passar de 8h.",
+        title: "O total do dia não pode passar de 9h.",
         description: "Some todos os projetos e atividades lançados no dia.",
       });
       return;
