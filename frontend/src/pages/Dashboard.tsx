@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { useNavigate } from "react-router-dom";
-import { AlertTriangle, Banknote, TrendingUp, Clock, FolderOpen, Hourglass, Wallet } from "lucide-react";
+import { AlertTriangle, Banknote, TrendingUp, Clock, FolderOpen, HandCoins, Hourglass, Landmark, Wallet } from "lucide-react";
 import { DashboardLayout } from "@/layouts/DashboardLayout";
 import { StatCard } from "@/components/StatCard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/chart";
 import { DataTable } from "@/components/DataTable";
 import { formatCurrency, getProjectDashboard, type ProjectDashboard } from "@/services/projects";
+import { getFinanceSummary, type FinanceSummary } from "@/services/finance";
 import { formatMinutes } from "@/services/workHours";
 
 const financeChartConfig = {
@@ -48,12 +49,18 @@ const formatMonth = (monthLabel: string) => {
 const DashboardPage = () => {
   const navigate = useNavigate();
   const [data, setData] = useState<ProjectDashboard | null>(null);
+  const [finance, setFinance] = useState<FinanceSummary | null>(null);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
 
   const load = async () => {
     setIsLoading(true);
     setError("");
+
+    // Financial cards are optional: the dashboard still loads if the finance module is unavailable.
+    void getFinanceSummary()
+      .then(setFinance)
+      .catch(() => setFinance(null));
 
     try {
       setData(await getProjectDashboard());
@@ -118,11 +125,23 @@ const DashboardPage = () => {
                 highlight
               />
               <StatCard
-                title="Lucro"
-                value={formatCurrency(data.totalProfit)}
-                subtitle="projetos finalizados (valor final − custos)"
+                title="Lucro líquido do mês"
+                value={finance ? formatCurrency(finance.monthNetIncome) : "—"}
+                subtitle={`DRE de ${formatMonth(finance?.month ?? data.monthLabel)} (receitas − custos − despesas)`}
                 icon={<TrendingUp className="h-4 w-4" />}
                 highlight
+              />
+              <StatCard
+                title="Caixa hoje"
+                value={finance?.cash != null ? formatCurrency(finance.cash) : "—"}
+                subtitle={finance && !finance.hasOpeningBalance ? "configure o saldo inicial" : "saldo em caixa e bancos"}
+                icon={<Landmark className="h-4 w-4" />}
+              />
+              <StatCard
+                title="A receber"
+                value={finance?.receivables != null ? formatCurrency(finance.receivables) : "—"}
+                subtitle="projetos entregues ainda não pagos pelo cliente"
+                icon={<HandCoins className="h-4 w-4" />}
               />
               <StatCard
                 title="Horas no mês"

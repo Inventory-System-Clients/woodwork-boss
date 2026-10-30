@@ -22,6 +22,9 @@ import ProjectsPage from "./pages/Projects.tsx";
 import ProjectDetailPage from "./pages/ProjectDetail.tsx";
 import HoursReportPage from "./pages/HoursReport.tsx";
 import LogisticsPage from "./pages/Logistics.tsx";
+import FinanceStatementsPage from "./pages/FinanceStatements.tsx";
+import FinanceExpensesPage from "./pages/FinanceExpenses.tsx";
+import FinanceRegistersPage from "./pages/FinanceRegisters.tsx";
 
 const queryClient = new QueryClient();
 
@@ -54,6 +57,9 @@ const App = () => (
                   <Route path="/teams" element={<TeamsPage />} />
                   <Route path="/products" element={<ProductsPage />} />
                   <Route path="/budgets" element={<BudgetsPage />} />
+                  <Route path="/finance" element={<FinanceStatementsPage />} />
+                  <Route path="/finance/expenses" element={<FinanceExpensesPage />} />
+                  <Route path="/finance/registers" element={<FinanceRegistersPage />} />
                 </Route>
               </Route>
 

@@ -1,4 +1,4 @@
-import { User, Hammer, Clock, LayoutDashboard, FolderOpen, Timer } from "lucide-react";
+import { User, Hammer, Clock, LayoutDashboard, FolderOpen, Timer, Landmark, Receipt, Wrench } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useAuth } from "@/auth/AuthProvider";
 import type { UserRole } from "@/auth/types";
@@ -11,17 +11,23 @@ interface NavItem {
   url: string;
   icon: React.ComponentType<{ className?: string }>;
   allowedRoles: UserRole[];
+  /** Active only on this exact path (not on sub-paths). */
+  exact?: boolean;
 }
 
-const navItems = [
+const navItems: NavItem[] = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard, allowedRoles: ["admin"] },
   { title: "Projetos", url: "/projects", icon: FolderOpen, allowedRoles: ["admin"] },
   { title: "Bater ponto", url: "/hours", icon: Clock, allowedRoles: ["admin", "funcionario"] },
   { title: "Horas por funcionário", url: "/hours-report", icon: Timer, allowedRoles: ["admin"] },
   { title: "Funcionários", url: "/employees", icon: User, allowedRoles: ["admin"] },
+  // Financeiro (somente admin).
+  { title: "Demonstrações", url: "/finance", icon: Landmark, allowedRoles: ["admin"], exact: true },
+  { title: "Despesas fixas", url: "/finance/expenses", icon: Receipt, allowedRoles: ["admin"] },
+  { title: "Bens, empréstimos e sócios", url: "/finance/registers", icon: Wrench, allowedRoles: ["admin"] },
   // Pós-MVP (proposta): telas mantidas e acessíveis pela URL, mas fora do menu do administrador.
   { title: "Produção", url: "/production", icon: Hammer, allowedRoles: ["funcionario"] },
-] satisfies NavItem[];
+];
 
 interface AppSidebarProps {
   mobileOpen?: boolean;
@@ -70,13 +76,14 @@ export function AppSidebar({ mobileOpen = false, onCloseMobile }: AppSidebarProp
 
       <nav className="flex-1 p-3 space-y-0.5 overflow-y-auto">
         {visibleItems.map((item) => {
-          const isActive = item.url === "/" ? location.pathname === "/" : location.pathname.startsWith(item.url);
+          const isExact = item.url === "/" || Boolean(item.exact);
+          const isActive = isExact ? location.pathname === item.url : location.pathname.startsWith(item.url);
 
           return (
             <NavLink
               key={item.url}
               to={item.url}
-              end={item.url === "/"}
+              end={isExact}
               onClick={() => {
                 if (isMobile) {
                   onCloseMobile?.();

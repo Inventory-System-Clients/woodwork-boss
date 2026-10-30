@@ -29,6 +29,7 @@ import { createProductionShareLink, listProductionImages, uploadProductionImages
 import { printProjectReport } from "@/lib/projectReport";
 import { calculateDeliveryTotals, printDeliveryReport } from "@/lib/deliveryReport";
 import { listClients } from "@/services/clients";
+import { ProjectReceipts } from "@/components/ProjectReceipts";
 import { ProjectStatusBadge } from "./Projects";
 
 const todayLocal = () => new Date().toLocaleDateString("en-CA");
@@ -150,6 +151,7 @@ const ProjectDetailPage = () => {
   const [isSharing, setIsSharing] = useState(false);
   const [deliveryValues, setDeliveryValues] = useState({ labor: "", discount: "", finalValue: "" });
   const [isSavingDelivery, setIsSavingDelivery] = useState(false);
+  const [moneyTab, setMoneyTab] = useState<"costs" | "receipts">("costs");
 
   const load = async () => {
     setIsLoading(true);
@@ -516,7 +518,21 @@ Os custos, fotos, link de acompanhamento e materiais serão apagados. Esta açã
                   <ProjectStatusBadge status={project.status} />
                   <select
                     value={project.status}
-                    onChange={(event) => void saveField({ status: event.target.value as ProjectStatus }).catch(() => undefined)}
+                    onChange={(event) => {
+                      const status = event.target.value as ProjectStatus;
+
+                      // Revenue enters on delivery at the final value, so it must exist before finishing.
+                      if (status === "Finalizado" && project.finalValue === null) {
+                        toast({
+                          variant: "destructive",
+                          title: "Informe o valor final antes de finalizar",
+                          description: "Preencha “Valor final cobrado” e salve os valores; depois finalize o projeto.",
+                        });
+                        return;
+                      }
+
+                      void saveField({ status }).catch(() => undefined);
+                    }}
                     className="px-2 py-1 bg-secondary/50 border border-border rounded text-xs focus:outline-none focus:ring-1 focus:ring-ring"
                     aria-label="Alterar status"
                   >
@@ -530,90 +546,117 @@ Os custos, fotos, link de acompanhamento e materiais serão apagados. Esta açã
               </div>
             </section>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <StatCard title="Total pago" value={formatCurrency(project.totals.totalPaid)} icon={<Check className="h-4 w-4" />} />
-              <StatCard title="Total a pagar" value={formatCurrency(project.totals.totalToPay)} icon={<Undo2 className="h-4 w-4" />} />
-              <StatCard title="Custo total" value={formatCurrency(project.totals.totalCost)} icon={<Plus className="h-4 w-4" />} highlight />
+            <div className="flex gap-1 border-b border-border">
+              {(
+                [
+                  ["costs", "Custos"],
+                  ["receipts", "Recebimentos"],
+                ] as const
+              ).map(([tab, label]) => (
+                <button
+                  key={tab}
+                  onClick={() => setMoneyTab(tab)}
+                  className={`px-4 py-2 text-xs font-bold uppercase tracking-wider border-b-2 -mb-px transition-colors ${
+                    moneyTab === tab
+                      ? "border-primary text-foreground"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
 
-            <section className="space-y-2">
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="text-[11px] uppercase tracking-widest text-muted-foreground font-bold">Custos</h2>
-                <button
-                  onClick={() => setIsCostModalOpen(true)}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs sm:text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90"
-                >
-                  <Plus className="h-4 w-4" /> Adicionar custo
-                </button>
-              </div>
+            {moneyTab === "receipts" && <ProjectReceipts projectId={id} finalValue={project.finalValue} />}
 
-              <DataTable
-                data={project.costs}
-                emptyMessage="Nenhum custo lançado. Use “Adicionar custo”."
-                columns={[
-                  {
-                    key: "description",
-                    header: "O que comprou?",
-                    render: (cost) => (
-                      <span>
-                        {cost.description}
-                        {cost.isCommission && (
-                          <span className="ml-2 px-1.5 py-0.5 rounded bg-primary/20 text-primary text-[10px] font-bold uppercase">
-                            Comissão{cost.commissionEmployeeName ? ` · ${cost.commissionEmployeeName}` : ""}
-                            {cost.commissionPercent !== null ? ` · ${cost.commissionPercent}%` : ""}
+            {moneyTab === "costs" && (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <StatCard title="Total pago" value={formatCurrency(project.totals.totalPaid)} icon={<Check className="h-4 w-4" />} />
+                  <StatCard title="Total a pagar" value={formatCurrency(project.totals.totalToPay)} icon={<Undo2 className="h-4 w-4" />} />
+                  <StatCard title="Custo total" value={formatCurrency(project.totals.totalCost)} icon={<Plus className="h-4 w-4" />} highlight />
+                </div>
+
+                <section className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <h2 className="text-[11px] uppercase tracking-widest text-muted-foreground font-bold">Custos</h2>
+                    <button
+                      onClick={() => setIsCostModalOpen(true)}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 text-xs sm:text-sm rounded bg-primary text-primary-foreground font-medium hover:opacity-90"
+                    >
+                      <Plus className="h-4 w-4" /> Adicionar custo
+                    </button>
+                  </div>
+
+                  <DataTable
+                    data={project.costs}
+                    emptyMessage="Nenhum custo lançado. Use “Adicionar custo”."
+                    columns={[
+                      {
+                        key: "description",
+                        header: "O que comprou?",
+                        render: (cost) => (
+                          <span>
+                            {cost.description}
+                            {cost.isCommission && (
+                              <span className="ml-2 px-1.5 py-0.5 rounded bg-primary/20 text-primary text-[10px] font-bold uppercase">
+                                Comissão{cost.commissionEmployeeName ? ` · ${cost.commissionEmployeeName}` : ""}
+                                {cost.commissionPercent !== null ? ` · ${cost.commissionPercent}%` : ""}
+                              </span>
+                            )}
                           </span>
-                        )}
-                      </span>
-                    ),
-                  },
-                  { key: "supplier", header: "Fornecedor", render: (cost) => cost.supplier || "—" },
-                  { key: "amount", header: "Valor", mono: true, render: (cost) => formatCurrency(cost.amount) },
-                  {
-                    key: "isPaid",
-                    header: "Pago?",
-                    render: (cost) =>
-                      cost.isPaid ? (
-                        <span className="text-success text-xs font-bold">Pago em {formatDateOnly(cost.paidAt)}</span>
-                      ) : (
-                        <span className="text-amber-300 text-xs font-bold">A pagar</span>
-                      ),
-                  },
-                  {
-                    key: "actions",
-                    header: "",
-                    render: (cost) => (
-                      <div className="flex items-center justify-end gap-1" onClick={(event) => event.stopPropagation()}>
-                        {cost.isPaid ? (
-                          <button
-                            onClick={() => void unpay(cost)}
-                            className="px-2 py-1 text-[11px] rounded border border-border hover:bg-secondary"
-                          >
-                            Desfazer
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => {
-                              setPayDate(todayLocal());
-                              setPayingCost(cost);
-                            }}
-                            className="px-2 py-1 text-[11px] font-bold rounded border border-success/40 text-success hover:bg-success/10"
-                          >
-                            Marcar como pago
-                          </button>
-                        )}
-                        <button
-                          onClick={() => void removeCost(cost)}
-                          className="p-1.5 rounded text-muted-foreground hover:text-destructive hover:bg-secondary"
-                          aria-label="Excluir custo"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    ),
-                  },
-                ]}
-              />
-            </section>
+                        ),
+                      },
+                      { key: "supplier", header: "Fornecedor", render: (cost) => cost.supplier || "—" },
+                      { key: "amount", header: "Valor", mono: true, render: (cost) => formatCurrency(cost.amount) },
+                      {
+                        key: "isPaid",
+                        header: "Pago?",
+                        render: (cost) =>
+                          cost.isPaid ? (
+                            <span className="text-success text-xs font-bold">Pago em {formatDateOnly(cost.paidAt)}</span>
+                          ) : (
+                            <span className="text-amber-300 text-xs font-bold">A pagar</span>
+                          ),
+                      },
+                      {
+                        key: "actions",
+                        header: "",
+                        render: (cost) => (
+                          <div className="flex items-center justify-end gap-1" onClick={(event) => event.stopPropagation()}>
+                            {cost.isPaid ? (
+                              <button
+                                onClick={() => void unpay(cost)}
+                                className="px-2 py-1 text-[11px] rounded border border-border hover:bg-secondary"
+                              >
+                                Desfazer
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setPayDate(todayLocal());
+                                  setPayingCost(cost);
+                                }}
+                                className="px-2 py-1 text-[11px] font-bold rounded border border-success/40 text-success hover:bg-success/10"
+                              >
+                                Marcar como pago
+                              </button>
+                            )}
+                            <button
+                              onClick={() => void removeCost(cost)}
+                              className="p-1.5 rounded text-muted-foreground hover:text-destructive hover:bg-secondary"
+                              aria-label="Excluir custo"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        ),
+                      },
+                    ]}
+                  />
+                </section>
+              </>
+            )}
 
             <section className="border border-border rounded bg-card p-4 sm:p-5 space-y-3">
               <h2 className="text-[11px] uppercase tracking-widest text-muted-foreground font-bold">
