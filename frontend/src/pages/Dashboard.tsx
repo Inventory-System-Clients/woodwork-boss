@@ -14,7 +14,15 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart";
 import { DataTable } from "@/components/DataTable";
-import { formatCurrency, getProjectDashboard, type ProjectDashboard } from "@/services/projects";
+import { CostReportModal } from "@/components/CostReportModal";
+import { toast } from "@/components/ui/use-toast";
+import {
+  formatCurrency,
+  formatDateOnly,
+  getProjectDashboard,
+  type DashboardPeriod,
+  type ProjectDashboard,
+} from "@/services/projects";
 import { getFinanceSummary, type FinanceSummary } from "@/services/finance";
 import { formatMinutes } from "@/services/workHours";
 
@@ -52,18 +60,22 @@ const DashboardPage = () => {
   const [finance, setFinance] = useState<FinanceSummary | null>(null);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  /** Null = no filter: the dashboard shows the current totals, as before. */
+  const [period, setPeriod] = useState<DashboardPeriod | null>(null);
+  const [draft, setDraft] = useState({ from: "", to: "" });
+  const [isCostReportOpen, setIsCostReportOpen] = useState(false);
 
   const load = async () => {
     setIsLoading(true);
     setError("");
 
     // Financial cards are optional: the dashboard still loads if the finance module is unavailable.
-    void getFinanceSummary()
+    void getFinanceSummary(period)
       .then(setFinance)
       .catch(() => setFinance(null));
 
     try {
-      setData(await getProjectDashboard());
+      setData(await getProjectDashboard(period));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Falha ao carregar o dashboard.");
     } finally {
@@ -73,7 +85,23 @@ const DashboardPage = () => {
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [period?.from, period?.to]);
+
+  const applyPeriod = () => {
+    if (!draft.from || !draft.to || draft.from > draft.to) {
+      toast({ variant: "destructive", title: "Informe as duas datas (início antes do fim)." });
+      return;
+    }
+
+    setPeriod({ from: draft.from, to: draft.to });
+  };
+
+  const clearPeriod = () => {
+    setDraft({ from: "", to: "" });
+    setPeriod(null);
+  };
+
+  const periodLabel = period ? `${formatDateOnly(period.from)} a ${formatDateOnly(period.to)}` : "";
 
   const monthlyRows = useMemo(
     () => (data?.monthly ?? []).map((point) => ({ ...point, label: shortMonth(point.month) })),
@@ -84,6 +112,38 @@ const DashboardPage = () => {
   return (
     <DashboardLayout title="Dashboard" subtitle="Visão geral">
       <div className="animate-fade-in space-y-6">
+        <div className="flex flex-wrap items-end gap-2 border border-border rounded bg-card px-3 py-2">
+          <label className="space-y-1">
+            <span className="block text-[11px] uppercase tracking-wider text-muted-foreground font-medium">De</span>
+            <input
+              type="date"
+              value={draft.from}
+              onChange={(event) => setDraft((current) => ({ ...current, from: event.target.value }))}
+              className="px-3 py-1.5 bg-secondary/50 border border-border rounded text-sm"
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="block text-[11px] uppercase tracking-wider text-muted-foreground font-medium">Até</span>
+            <input
+              type="date"
+              value={draft.to}
+              onChange={(event) => setDraft((current) => ({ ...current, to: event.target.value }))}
+              className="px-3 py-1.5 bg-secondary/50 border border-border rounded text-sm"
+            />
+          </label>
+          <button onClick={applyPeriod} className="px-3 py-2 text-xs font-bold rounded bg-primary text-primary-foreground hover:opacity-90">
+            FILTRAR PERÍODO
+          </button>
+          {period && (
+            <button onClick={clearPeriod} className="px-3 py-2 text-xs font-bold rounded border border-border hover:bg-secondary">
+              LIMPAR
+            </button>
+          )}
+          <span className="text-xs text-muted-foreground sm:ml-auto self-center">
+            {period ? `Mostrando ${periodLabel}` : "Sem filtro: totais atuais"}
+          </span>
+        </div>
+
         {error && (
           <div className="border border-destructive/40 bg-destructive/10 rounded px-3 py-2 text-sm text-destructive flex items-center justify-between gap-3">
             <span>{error}</span>
@@ -102,51 +162,69 @@ const DashboardPage = () => {
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
               <StatCard
-                title="Projetos em andamento"
+                title={period ? "Projetos no período" : "Projetos em andamento"}
                 value={data.activeProjects}
-                subtitle={`${data.totalProjects} projetos no total`}
+                subtitle={period ? `em andamento em algum momento · ${data.totalProjects} criados no período` : `${data.totalProjects} projetos no total`}
                 icon={<FolderOpen className="h-4 w-4" />}
                 highlight
               />
               <StatCard
                 title="Total pago"
                 value={formatCurrency(data.totals.totalPaid)}
+                subtitle={period ? "dos custos lançados no período" : undefined}
                 icon={<Wallet className="h-4 w-4" />}
               />
               <StatCard
                 title="Total a pagar"
                 value={formatCurrency(data.totals.totalToPay)}
+                subtitle={period ? "dos custos lançados no período" : undefined}
                 icon={<Hourglass className="h-4 w-4" />}
               />
               <StatCard
                 title="Custo total"
                 value={formatCurrency(data.totals.totalCost)}
+                subtitle={period ? "lançados no período · clique para ver a origem" : "clique para ver de onde vem"}
                 icon={<Banknote className="h-4 w-4" />}
                 highlight
+                onClick={() => setIsCostReportOpen(true)}
               />
               <StatCard
-                title="Lucro líquido do mês"
-                value={finance ? formatCurrency(finance.monthNetIncome) : "—"}
-                subtitle={`DRE de ${formatMonth(finance?.month ?? data.monthLabel)} (receitas − custos − despesas)`}
+                title={period ? "Lucro líquido do período" : "Lucro líquido do mês"}
+                value={finance ? formatCurrency(finance.netIncome) : "—"}
+                subtitle={
+                  period
+                    ? `DRE de ${periodLabel} (receitas − custos − despesas)`
+                    : `DRE de ${formatMonth(finance?.month ?? data.monthLabel)} (receitas − custos − despesas)`
+                }
                 icon={<TrendingUp className="h-4 w-4" />}
                 highlight
               />
               <StatCard
-                title="Caixa hoje"
+                title={period ? "Caixa no fim do período" : "Caixa hoje"}
                 value={finance?.cash != null ? formatCurrency(finance.cash) : "—"}
-                subtitle={finance && !finance.hasOpeningBalance ? "configure o saldo inicial" : "saldo em caixa e bancos"}
+                subtitle={
+                  finance && !finance.hasOpeningBalance
+                    ? "configure o saldo inicial"
+                    : period && finance
+                      ? `saldo em ${formatDateOnly(finance.date)}`
+                      : "saldo em caixa e bancos"
+                }
                 icon={<Landmark className="h-4 w-4" />}
               />
               <StatCard
                 title="A receber"
                 value={finance?.receivables != null ? formatCurrency(finance.receivables) : "—"}
-                subtitle="projetos entregues ainda não pagos pelo cliente"
+                subtitle={
+                  period && finance
+                    ? `projetos entregues não pagos em ${formatDateOnly(finance.date)}`
+                    : "projetos entregues ainda não pagos pelo cliente"
+                }
                 icon={<HandCoins className="h-4 w-4" />}
               />
               <StatCard
-                title="Horas no mês"
+                title={period ? "Horas no período" : "Horas no mês"}
                 value={formatMinutes(data.hoursMonthMinutes)}
-                subtitle={formatMonth(data.monthLabel)}
+                subtitle={period ? periodLabel : formatMonth(data.monthLabel)}
                 icon={<Clock className="h-4 w-4" />}
               />
             </div>
@@ -157,7 +235,7 @@ const DashboardPage = () => {
                   <CardTitle className="text-sm">Lucro, gastos e comissão por mês</CardTitle>
                   <CardDescription>
                     Gastos e comissão pelo mês do lançamento; lucro (valor final − custos − comissões) pelo mês em que o
-                    projeto foi finalizado. Últimos 12 meses.
+                    projeto foi finalizado. {period ? "Meses do período filtrado." : "Últimos 12 meses."}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="pt-4">
@@ -229,7 +307,7 @@ const DashboardPage = () => {
 
             <section className="space-y-2">
               <h2 className="text-[11px] uppercase tracking-widest text-muted-foreground font-bold">
-                Projetos com maior custo
+                Projetos com maior custo{period ? " no período" : ""}
               </h2>
               <DataTable
                 data={data.topProjects}
@@ -265,6 +343,7 @@ const DashboardPage = () => {
           </>
         )}
       </div>
+      <CostReportModal open={isCostReportOpen} onClose={() => setIsCostReportOpen(false)} period={period} />
     </DashboardLayout>
   );
 };

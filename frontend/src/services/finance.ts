@@ -107,6 +107,9 @@ export const markCompanyExpensePaid = (id: string, paidAt?: string) =>
   send<CompanyExpense>(`/company-expenses/${enc(id)}/pay`, "PATCH", { paidAt });
 export const markCompanyExpenseUnpaid = (id: string) => send<CompanyExpense>(`/company-expenses/${enc(id)}/unpay`, "PATCH");
 export const deleteCompanyExpense = (id: string) => send<unknown>(`/company-expenses/${enc(id)}`, "DELETE");
+/** Moves the selected expenses to another competence month (YYYY-MM). */
+export const moveCompanyExpensesToMonth = (ids: string[], month: string) =>
+  send<{ moved: number; notFound: string[] }>("/company-expenses/move-month", "POST", { ids, month });
 export const copyPreviousMonthExpenses = (month: string) =>
   send<{ copied: number; expenses: CompanyExpense[] }>("/company-expenses/copy-previous", "POST", { month });
 
@@ -304,15 +307,20 @@ export const getFinancialStatements = (from: string, to: string) =>
   call<FinancialStatements>(`/finance/statements?from=${enc(from)}&to=${enc(to)}`);
 
 export interface FinanceSummary {
+  /** Date of the cash and receivables (end of the period, or today). */
   date: string;
+  from: string;
+  to: string;
   month: string;
-  monthNetIncome: number;
+  /** Net income of the period (current month when no period). */
+  netIncome: number;
   cash: number | null;
   receivables: number | null;
   hasOpeningBalance: boolean;
 }
 
-export const getFinanceSummary = () => call<FinanceSummary>("/finance/summary");
+export const getFinanceSummary = (period?: { from: string; to: string } | null) =>
+  call<FinanceSummary>(period ? `/finance/summary?from=${enc(period.from)}&to=${enc(period.to)}` : "/finance/summary");
 
 // ---------- Dates ----------
 

@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Copy, Plus, Trash2 } from "lucide-react";
+import { ArrowRightLeft, ChevronLeft, ChevronRight, Copy, Plus, Trash2 } from "lucide-react";
 import { DashboardLayout } from "@/layouts/DashboardLayout";
 import { DataTable } from "@/components/DataTable";
 import { FormField } from "@/components/FormField";
@@ -17,6 +17,7 @@ import {
   listCompanyExpenses,
   markCompanyExpensePaid,
   markCompanyExpenseUnpaid,
+  moveCompanyExpensesToMonth,
   parseMoney,
   shiftMonth,
   todayLocal,
@@ -46,6 +47,10 @@ const FinanceExpensesPage = () => {
   const [paying, setPaying] = useState<CompanyExpense | null>(null);
   const [payDate, setPayDate] = useState(todayLocal());
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [isMoveOpen, setIsMoveOpen] = useState(false);
+  const [moveTarget, setMoveTarget] = useState("");
+  const [isMoving, setIsMoving] = useState(false);
 
   const load = async () => {
     setIsLoading(true);
@@ -61,6 +66,7 @@ const FinanceExpensesPage = () => {
   };
 
   useEffect(() => {
+    setSelected(new Set());
     void load();
   }, [month]);
 
@@ -157,6 +163,49 @@ const FinanceExpensesPage = () => {
     }
   };
 
+  const toggleSelected = (id: string) =>
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const allSelected = expenses.length > 0 && expenses.every((expense) => selected.has(expense.id));
+  const selectedTotal = expenses.filter((expense) => selected.has(expense.id)).reduce((sum, expense) => sum + expense.amount, 0);
+
+  const openMove = (ids?: string[]) => {
+    if (ids) setSelected(new Set(ids));
+    setMoveTarget(shiftMonth(month, -1));
+    setIsMoveOpen(true);
+  };
+
+  const confirmMove = async (event: FormEvent) => {
+    event.preventDefault();
+
+    if (!moveTarget || moveTarget === month) {
+      toast({ variant: "destructive", title: "Escolha um mês diferente do atual." });
+      return;
+    }
+
+    setIsMoving(true);
+
+    try {
+      const result = await moveCompanyExpensesToMonth([...selected], moveTarget);
+      toast({
+        title: `${result.moved} ${result.moved === 1 ? "despesa movida" : "despesas movidas"} para ${formatMonthLong(moveTarget)}`,
+        description: result.notFound.length > 0 ? `${result.notFound.length} não foram encontradas (já excluídas?).` : undefined,
+      });
+      setIsMoveOpen(false);
+      setSelected(new Set());
+      await load();
+    } catch (moveError) {
+      notifyError("Não foi possível mudar o mês", moveError);
+    } finally {
+      setIsMoving(false);
+    }
+  };
+
   const remove = async (expense: CompanyExpense) => {
     if (!window.confirm(`Excluir a despesa “${expense.description}”?`)) return;
 
@@ -231,10 +280,55 @@ const FinanceExpensesPage = () => {
           ))}
         </div>
 
+        {expenses.length > 0 && (
+          <div className="flex flex-wrap items-center gap-3 text-xs">
+            <label className="inline-flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={() => setSelected(allSelected ? new Set() : new Set(expenses.map((expense) => expense.id)))}
+                className="h-4 w-4 accent-primary"
+              />
+              Selecionar todas
+            </label>
+            {selected.size > 0 && (
+              <>
+                <span className="text-muted-foreground">
+                  {selected.size} {selected.size === 1 ? "selecionada" : "selecionadas"} · {formatCurrency(selectedTotal)}
+                </span>
+                <button
+                  onClick={() => openMove()}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 font-bold rounded bg-primary text-primary-foreground hover:opacity-90"
+                >
+                  <ArrowRightLeft className="h-3.5 w-3.5" /> MUDAR MÊS
+                </button>
+                <button onClick={() => setSelected(new Set())} className="px-2 py-1.5 rounded border border-border hover:bg-secondary">
+                  Limpar seleção
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
         <DataTable
           data={expenses}
+          rowHighlight={(expense) => (selected.has(expense.id) ? "bg-primary/10" : "")}
           emptyMessage={isLoading ? "Carregando..." : "Nenhuma despesa neste mês. Lance uma ou copie o mês anterior."}
           columns={[
+            {
+              key: "select",
+              header: "",
+              className: "w-8",
+              render: (expense) => (
+                <input
+                  type="checkbox"
+                  checked={selected.has(expense.id)}
+                  onChange={() => toggleSelected(expense.id)}
+                  aria-label={`Selecionar ${expense.description}`}
+                  className="h-4 w-4 accent-primary cursor-pointer"
+                />
+              ),
+            },
             { key: "category", header: "Categoria", render: (expense) => expenseCategoryLabel(expense.category) },
             {
               key: "description",
@@ -277,6 +371,14 @@ const FinanceExpensesPage = () => {
                       Marcar como pago
                     </button>
                   )}
+                  <button
+                    onClick={() => openMove([expense.id])}
+                    className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
+                    aria-label="Mudar mês"
+                    title="Mudar mês"
+                  >
+                    <ArrowRightLeft className="h-3.5 w-3.5" />
+                  </button>
                   <button
                     onClick={() => void remove(expense)}
                     className="p-1.5 rounded text-muted-foreground hover:text-destructive hover:bg-secondary"
@@ -385,6 +487,32 @@ const FinanceExpensesPage = () => {
             </button>
             <button type="submit" className="px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium">
               Confirmar
+            </button>
+          </div>
+        </form>
+      </Modal>
+      <Modal open={isMoveOpen} onClose={() => setIsMoveOpen(false)} title="Mudar mês das despesas" width="max-w-sm">
+        <form onSubmit={confirmMove} className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            {selected.size} {selected.size === 1 ? "despesa" : "despesas"} ({formatCurrency(selectedTotal)}) de{" "}
+            <span className="capitalize">{formatMonthLong(month)}</span>.
+          </p>
+          <FormField
+            label="Mover para o mês"
+            type="month"
+            value={moveTarget}
+            onChange={(event) => setMoveTarget(event.target.value)}
+            autoFocus
+          />
+          <p className="text-xs text-muted-foreground">
+            Muda só o mês de competência (em que mês a despesa entra na DRE). Valor, situação e data de pagamento ficam iguais.
+          </p>
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" onClick={() => setIsMoveOpen(false)} className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary">
+              Cancelar
+            </button>
+            <button type="submit" disabled={isMoving} className="px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium disabled:opacity-60">
+              {isMoving ? "Movendo..." : "Mover"}
             </button>
           </div>
         </form>

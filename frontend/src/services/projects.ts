@@ -11,10 +11,14 @@ export interface ProjectListItem {
   status: ProjectStatus;
   /** Only present for admins. */
   totalCost: number | null;
+  /** Costs not paid yet. Admin only. */
+  totalToPay: number | null;
   /** Gross value charged to the client. Admin only. */
   grossValue: number | null;
   /** Gross value - total cost. Admin only. */
   netProfit: number | null;
+  /** Gross value - client receipts already received. Admin only. */
+  remainingToReceive: number | null;
 }
 
 export interface ProjectTotals {
@@ -65,7 +69,15 @@ export interface ProjectDetail {
   costs: ProjectCost[];
 }
 
+/** Dashboard period (YYYY-MM-DD, inclusive). */
+export interface DashboardPeriod {
+  from: string;
+  to: string;
+}
+
 export interface ProjectDashboard {
+  /** Null when no period was requested (current totals). */
+  period: DashboardPeriod | null;
   activeProjects: number;
   totalProjects: number;
   overdueProjects: number;
@@ -86,6 +98,38 @@ export interface ProjectMonthlyPoint {
   profit: number;
   /** Highest number of projects running on the same day of the month. */
   peakProjects: number;
+}
+
+export interface CostReportItem {
+  id: string;
+  description: string;
+  supplier: string | null;
+  amount: number;
+  isPaid: boolean;
+  paidAt: string | null;
+  createdAt: string;
+  isCommission: boolean;
+  commissionEmployeeName: string | null;
+}
+
+export interface CostReportProject {
+  projectId: string;
+  name: string;
+  clientName: string;
+  status: ProjectStatus;
+  totalCost: number;
+  totalPaid: number;
+  totalToPay: number;
+  commissions: number;
+  items: CostReportItem[];
+}
+
+/** Where the dashboard "total cost" comes from. */
+export interface CostReport {
+  period: DashboardPeriod | null;
+  totals: ProjectTotals & { materials: number; commissions: number; costCount: number };
+  projects: CostReportProject[];
+  suppliers: { supplier: string; total: number; count: number }[];
 }
 
 export interface CreateProjectCostInput {
@@ -157,6 +201,9 @@ const mapListItem = (item: ProjectListItem): ProjectListItem => ({
   totalCost: item.totalCost === undefined || item.totalCost === null ? null : num(item.totalCost),
   grossValue: item.grossValue === undefined || item.grossValue === null ? null : num(item.grossValue),
   netProfit: item.netProfit === undefined || item.netProfit === null ? null : num(item.netProfit),
+  totalToPay: item.totalToPay === undefined || item.totalToPay === null ? null : num(item.totalToPay),
+  remainingToReceive:
+    item.remainingToReceive === undefined || item.remainingToReceive === null ? null : num(item.remainingToReceive),
 });
 
 const mapCost = (item: ProjectCost): ProjectCost => ({
@@ -252,10 +299,14 @@ export const deleteProjectCost = async (projectId: string, costId: string) => {
   });
 };
 
-export const getProjectDashboard = async (): Promise<ProjectDashboard> => {
-  const data = unwrap<ProjectDashboard>(await request<unknown>("/projects/dashboard"));
+const periodQuery = (period?: DashboardPeriod | null) =>
+  period ? `?from=${encodeURIComponent(period.from)}&to=${encodeURIComponent(period.to)}` : "";
+
+export const getProjectDashboard = async (period?: DashboardPeriod | null): Promise<ProjectDashboard> => {
+  const data = unwrap<ProjectDashboard>(await request<unknown>(`/projects/dashboard${periodQuery(period)}`));
 
   return {
+    period: data.period ?? null,
     activeProjects: num(data.activeProjects),
     totalProjects: num(data.totalProjects),
     overdueProjects: num(data.overdueProjects),
@@ -277,3 +328,6 @@ export const getProjectDashboard = async (): Promise<ProjectDashboard> => {
     })),
   };
 };
+
+export const getCostReport = async (period?: DashboardPeriod | null): Promise<CostReport> =>
+  unwrap<CostReport>(await request<unknown>(`/projects/dashboard/costs${periodQuery(period)}`));

@@ -127,7 +127,6 @@ const ProjectsPage = () => {
             onRowClick={(project) => navigate(`/projects/${project.id}`)}
             columns={[
               { key: "name", header: "Projeto" },
-              { key: "clientName", header: "Cliente" },
               { key: "deadline", header: "Prazo", render: (project) => formatDateOnly(project.deadline) },
               { key: "status", header: "Status", render: (project) => <ProjectStatusBadge status={project.status} /> },
               {
@@ -137,10 +136,30 @@ const ProjectsPage = () => {
                 render: (project) => formatCurrency(project.totalCost ?? 0),
               },
               {
+                key: "totalToPay",
+                header: "Falta Pagar",
+                mono: true,
+                render: (project) => (
+                  <span className={(project.totalToPay ?? 0) > 0 ? "text-amber-300" : "text-muted-foreground"}>
+                    {formatCurrency(project.totalToPay ?? 0)}
+                  </span>
+                ),
+              },
+              {
                 key: "grossValue",
                 header: "Valor Final (Bruto)",
                 mono: true,
                 render: (project) => formatCurrency(project.grossValue ?? 0),
+              },
+              {
+                key: "remainingToReceive",
+                header: "Falta Receber",
+                mono: true,
+                render: (project) => (
+                  <span className={(project.remainingToReceive ?? 0) > 0 ? "text-amber-300" : "text-muted-foreground"}>
+                    {formatCurrency(project.remainingToReceive ?? 0)}
+                  </span>
+                ),
               },
               {
                 key: "netProfit",
