@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Check, FileText, ImagePlus, Link2, Plus, Trash2, Undo2 } from "lucide-react";
+import { ArrowLeft, Check, FileText, ImagePlus, Link2, Pencil, Plus, Trash2, Undo2 } from "lucide-react";
 import { DashboardLayout } from "@/layouts/DashboardLayout";
 import { DataTable } from "@/components/DataTable";
 import { FormField } from "@/components/FormField";
@@ -18,6 +18,7 @@ import {
   markProjectCostUnpaid,
   PROJECT_STATUSES,
   updateProject,
+  updateProjectCost,
   type ProjectCost,
   type ProjectDetail,
   type ProjectStatus,
@@ -45,6 +46,8 @@ const emptyCostForm = {
   commissionPercent: "",
   commissionEmployeeId: "",
 };
+
+const emptyEditCostForm = { description: "", amount: "", supplier: "", isPaid: "nao", paidAt: "" };
 
 const copyText = async (value: string) => {
   if (navigator.clipboard?.writeText) {
@@ -142,6 +145,9 @@ const ProjectDetailPage = () => {
   const [isSavingCost, setIsSavingCost] = useState(false);
   const [payingCost, setPayingCost] = useState<ProjectCost | null>(null);
   const [payDate, setPayDate] = useState(todayLocal());
+  const [editingCost, setEditingCost] = useState<ProjectCost | null>(null);
+  const [editCostForm, setEditCostForm] = useState(emptyEditCostForm);
+  const [isSavingEditCost, setIsSavingEditCost] = useState(false);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [updateNote, setUpdateNote] = useState("");
   const [isSavingNote, setIsSavingNote] = useState(false);
@@ -422,6 +428,49 @@ Os custos, fotos, link de acompanhamento e materiais serão apagados. Esta açã
     }
   };
 
+  const openEditCost = (cost: ProjectCost) => {
+    setEditCostForm({
+      description: cost.description,
+      amount: String(cost.amount),
+      supplier: cost.supplier ?? "",
+      isPaid: cost.isPaid ? "sim" : "nao",
+      paidAt: cost.paidAt ?? todayLocal(),
+    });
+    setEditingCost(cost);
+  };
+
+  const saveEditCost = async (event: FormEvent) => {
+    event.preventDefault();
+
+    if (!editingCost) return;
+
+    const amount = Number(editCostForm.amount.replace(",", "."));
+
+    if (!editCostForm.description.trim() || editCostForm.amount.trim() === "" || !Number.isFinite(amount) || amount < 0) {
+      toast({ variant: "destructive", title: "Informe a descrição e um valor válido." });
+      return;
+    }
+
+    const isPaid = editCostForm.isPaid === "sim";
+    setIsSavingEditCost(true);
+
+    try {
+      await updateProjectCost(id, editingCost.id, {
+        description: editCostForm.description.trim(),
+        amount,
+        supplier: editCostForm.supplier.trim() || null,
+        isPaid,
+        paidAt: isPaid ? editCostForm.paidAt || null : null,
+      });
+      setEditingCost(null);
+      await load();
+    } catch (editError) {
+      notifyError("Não foi possível salvar o custo", editError);
+    } finally {
+      setIsSavingEditCost(false);
+    }
+  };
+
   const removeCost = async (cost: ProjectCost) => {
     if (!window.confirm(`Excluir o custo “${cost.description}”?`)) return;
 
@@ -642,6 +691,14 @@ Os custos, fotos, link de acompanhamento e materiais serão apagados. Esta açã
                                 Marcar como pago
                               </button>
                             )}
+                            <button
+                              onClick={() => openEditCost(cost)}
+                              className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
+                              aria-label="Editar custo"
+                              title="Editar custo"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
                             <button
                               onClick={() => void removeCost(cost)}
                               className="p-1.5 rounded text-muted-foreground hover:text-destructive hover:bg-secondary"
@@ -969,6 +1026,70 @@ Os custos, fotos, link de acompanhamento e materiais serão apagados. Esta açã
             </button>
             <button type="submit" className="px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium">
               Confirmar
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal open={Boolean(editingCost)} onClose={() => setEditingCost(null)} title="Editar custo">
+        <form onSubmit={saveEditCost} className="space-y-4">
+          {editingCost?.isCommission && (
+            <p className="text-xs text-muted-foreground">
+              Comissão{editingCost.commissionEmployeeName ? ` de ${editingCost.commissionEmployeeName}` : ""}
+              {editingCost.commissionPercent !== null
+                ? ` (${editingCost.commissionPercent}%). Ao alterar o valor, a porcentagem deixa de ser exibida.`
+                : "."}
+            </p>
+          )}
+          <FormField
+            label="O que comprou?"
+            value={editCostForm.description}
+            onChange={(event) => setEditCostForm((current) => ({ ...current, description: event.target.value }))}
+            autoFocus
+          />
+          <FormField
+            label="Valor (R$)"
+            value={editCostForm.amount}
+            onChange={(event) => setEditCostForm((current) => ({ ...current, amount: event.target.value }))}
+            inputMode="decimal"
+          />
+          <FormField
+            label="Fornecedor (opcional)"
+            value={editCostForm.supplier}
+            onChange={(event) => setEditCostForm((current) => ({ ...current, supplier: event.target.value }))}
+          />
+          <FormField
+            label="Pago?"
+            as="select"
+            value={editCostForm.isPaid}
+            onChange={(event) => setEditCostForm((current) => ({ ...current, isPaid: event.target.value || "nao" }))}
+            options={[
+              { value: "nao", label: "Não (a pagar)" },
+              { value: "sim", label: "Sim" },
+            ]}
+          />
+          {editCostForm.isPaid === "sim" && (
+            <FormField
+              label="Data do pagamento"
+              type="date"
+              value={editCostForm.paidAt}
+              onChange={(event) => setEditCostForm((current) => ({ ...current, paidAt: event.target.value }))}
+            />
+          )}
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setEditingCost(null)}
+              className="px-4 py-2 text-sm rounded border border-border hover:bg-secondary"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={isSavingEditCost}
+              className="px-4 py-2 text-sm rounded bg-primary text-primary-foreground font-medium disabled:opacity-60"
+            >
+              {isSavingEditCost ? "Salvando..." : "Salvar"}
             </button>
           </div>
         </form>

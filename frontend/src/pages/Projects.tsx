@@ -30,6 +30,13 @@ export const ProjectStatusBadge = ({ status }: { status: ProjectStatus }) => (
   </span>
 );
 
+/** ISO timestamp -> DD/MM/YYYY in the business time zone. */
+const formatTimestampDate = (value: string | null | undefined) => {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+};
+
 const emptyForm = { name: "", clientName: "", clientDocument: "", deadline: "", status: "Em andamento" as ProjectStatus };
 
 const isValidDocument = (value: string) => [11, 14].includes(value.replace(/\D/g, "").length);
@@ -127,8 +134,20 @@ const ProjectsPage = () => {
             onRowClick={(project) => navigate(`/projects/${project.id}`)}
             columns={[
               { key: "name", header: "Projeto" },
+              { key: "createdAt", header: "Iniciado em", render: (project) => formatTimestampDate(project.createdAt) },
               { key: "deadline", header: "Prazo", render: (project) => formatDateOnly(project.deadline) },
-              { key: "status", header: "Status", render: (project) => <ProjectStatusBadge status={project.status} /> },
+              {
+                key: "status",
+                header: "Status",
+                render: (project) => (
+                  <span className="inline-flex items-center gap-2 whitespace-nowrap">
+                    <ProjectStatusBadge status={project.status} />
+                    {project.status === "Finalizado" && project.finishedAt && (
+                      <span className="text-xs text-muted-foreground">em {formatTimestampDate(project.finishedAt)}</span>
+                    )}
+                  </span>
+                ),
+              },
               {
                 key: "totalCost",
                 header: "Custo Total",

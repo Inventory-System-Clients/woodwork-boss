@@ -9,6 +9,10 @@ export interface ProjectListItem {
   clientName: string;
   deadline: string | null;
   status: ProjectStatus;
+  /** Project start (ISO). Admin only. */
+  createdAt: string | null;
+  /** When it was finished (ISO); null while not finished. Admin only. */
+  finishedAt: string | null;
   /** Only present for admins. */
   totalCost: number | null;
   /** Costs not paid yet. Admin only. */
@@ -145,6 +149,14 @@ export interface CreateProjectCostInput {
   commissionEmployeeId?: string;
 }
 
+export interface UpdateProjectCostInput {
+  description?: string;
+  amount?: number;
+  supplier?: string | null;
+  isPaid?: boolean;
+  paidAt?: string | null;
+}
+
 export interface UpdateProjectInput {
   name?: string;
   clientName?: string;
@@ -198,6 +210,8 @@ const mapListItem = (item: ProjectListItem): ProjectListItem => ({
   clientName: item.clientName ?? "",
   deadline: item.deadline ?? null,
   status: normalizeStatus(item.status),
+  createdAt: item.createdAt ?? null,
+  finishedAt: item.finishedAt ?? null,
   totalCost: item.totalCost === undefined || item.totalCost === null ? null : num(item.totalCost),
   grossValue: item.grossValue === undefined || item.grossValue === null ? null : num(item.grossValue),
   netProfit: item.netProfit === undefined || item.netProfit === null ? null : num(item.netProfit),
@@ -290,6 +304,16 @@ export const markProjectCostUnpaid = async (projectId: string, costId: string) =
         `/projects/${encodeURIComponent(projectId)}/costs/${encodeURIComponent(costId)}/unpay`,
         { method: "PATCH" },
       ),
+    ),
+  );
+
+export const updateProjectCost = async (projectId: string, costId: string, input: UpdateProjectCostInput) =>
+  mapCost(
+    unwrap<ProjectCost>(
+      await request<unknown>(`/projects/${encodeURIComponent(projectId)}/costs/${encodeURIComponent(costId)}`, {
+        method: "PATCH",
+        body: JSON.stringify(input),
+      }),
     ),
   );
 
